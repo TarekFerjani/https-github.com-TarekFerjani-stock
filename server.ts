@@ -1,43 +1,48 @@
 import express from "express";
 import path from "path";
-import { fileURLToPath } from "url";
+import cors from "cors";
+import dotenv from "dotenv";
 import { createServer as createViteServer } from "vite";
 import { createRequire } from "module";
 
+// Declare require so TypeScript compiler is happy
+declare const require: any;
+
 const resolvedUrl = typeof import.meta !== "undefined" && import.meta.url
   ? import.meta.url
-  : (typeof __filename !== "undefined" ? "file://" + __filename : "file://" + process.cwd() + "/server.js");
+  : "file://" + process.cwd() + "/server.js";
 
-const myRequire = createRequire(resolvedUrl);
+const myRequire = typeof require !== "undefined"
+  ? require
+  : createRequire(resolvedUrl);
 
 // Load dotenv
-myRequire('dotenv').config();
+dotenv.config();
+
+// Import DB pool to run load validation with absolute path
+const pool = myRequire(path.join(process.cwd(), "backend/db.js"));
+
+// Load and mount backend routes with absolute path
+const authRoutes = myRequire(path.join(process.cwd(), "backend/routes/auth.js"));
+const clientRoutes = myRequire(path.join(process.cwd(), "backend/routes/clients.js"));
+const productRoutes = myRequire(path.join(process.cwd(), "backend/routes/products.js"));
+const roomRoutes = myRequire(path.join(process.cwd(), "backend/routes/rooms.js"));
+const movementRoutes = myRequire(path.join(process.cwd(), "backend/routes/movements.js"));
+const locationRoutes = myRequire(path.join(process.cwd(), "backend/routes/locations.js"));
+const invoiceRoutes = myRequire(path.join(process.cwd(), "backend/routes/invoices.js"));
+const contractsRoutes = myRequire(path.join(process.cwd(), "backend/routes/contracts.js"));
+const settingsRoutes = myRequire(path.join(process.cwd(), "backend/routes/settings.js"));
+const paymentsRoutes = myRequire(path.join(process.cwd(), "backend/routes/payments.js"));
 
 async function startServer() {
   const app = express();
   const PORT = 3000; // MUST run on 3000
 
   // Apply cors
-  const cors = myRequire('cors');
   app.use(cors());
 
   // JSON parsing with size limit
   app.use(express.json({ limit: '10mb' }));
-
-  // Import DB pool to run load validation
-  const pool = myRequire('./backend/db.js');
-
-  // Load and mount backend routes
-  const authRoutes = myRequire('./backend/routes/auth.js');
-  const clientRoutes = myRequire('./backend/routes/clients.js');
-  const productRoutes = myRequire('./backend/routes/products.js');
-  const roomRoutes = myRequire('./backend/routes/rooms.js');
-  const movementRoutes = myRequire('./backend/routes/movements.js');
-  const locationRoutes = myRequire('./backend/routes/locations.js');
-  const invoiceRoutes = myRequire('./backend/routes/invoices.js');
-  const contractsRoutes = myRequire('./backend/routes/contracts.js');
-  const settingsRoutes = myRequire('./backend/routes/settings.js');
-  const paymentsRoutes = myRequire('./backend/routes/payments.js');
 
   // Register API routes
   app.use('/api', authRoutes);

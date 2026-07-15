@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const dbPath = path.join(__dirname, 'data.json');
+const dbPath = path.join(process.cwd(), 'backend', 'data.json');
 
 // Default initial data
 const defaultUsers = [
