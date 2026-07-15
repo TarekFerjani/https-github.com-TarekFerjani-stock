@@ -1,0 +1,10 @@
+{
+  "name": "Frigo",
+  "description": "Frigo is an intelligent inventory management application that helps you track products, manage inventory, and uses Gemini AI to generate product descriptions and suggest categories.",
+  "requestFramePermissions": [
+    "camera"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
