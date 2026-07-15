@@ -4,38 +4,40 @@ import { fileURLToPath } from "url";
 import { createServer as createViteServer } from "vite";
 import { createRequire } from "module";
 
-const require = createRequire(import.meta.url);
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const resolvedUrl = typeof import.meta !== "undefined" && import.meta.url
+  ? import.meta.url
+  : (typeof __filename !== "undefined" ? "file://" + __filename : "file://" + process.cwd() + "/server.js");
+
+const myRequire = createRequire(resolvedUrl);
 
 // Load dotenv
-require('dotenv').config();
+myRequire('dotenv').config();
 
 async function startServer() {
   const app = express();
   const PORT = 3000; // MUST run on 3000
 
   // Apply cors
-  const cors = require('cors');
+  const cors = myRequire('cors');
   app.use(cors());
 
   // JSON parsing with size limit
   app.use(express.json({ limit: '10mb' }));
 
   // Import DB pool to run load validation
-  const pool = require('./backend/db.js');
+  const pool = myRequire('./backend/db.js');
 
   // Load and mount backend routes
-  const authRoutes = require('./backend/routes/auth.js');
-  const clientRoutes = require('./backend/routes/clients.js');
-  const productRoutes = require('./backend/routes/products.js');
-  const roomRoutes = require('./backend/routes/rooms.js');
-  const movementRoutes = require('./backend/routes/movements.js');
-  const locationRoutes = require('./backend/routes/locations.js');
-  const invoiceRoutes = require('./backend/routes/invoices.js');
-  const contractsRoutes = require('./backend/routes/contracts.js');
-  const settingsRoutes = require('./backend/routes/settings.js');
-  const paymentsRoutes = require('./backend/routes/payments.js');
+  const authRoutes = myRequire('./backend/routes/auth.js');
+  const clientRoutes = myRequire('./backend/routes/clients.js');
+  const productRoutes = myRequire('./backend/routes/products.js');
+  const roomRoutes = myRequire('./backend/routes/rooms.js');
+  const movementRoutes = myRequire('./backend/routes/movements.js');
+  const locationRoutes = myRequire('./backend/routes/locations.js');
+  const invoiceRoutes = myRequire('./backend/routes/invoices.js');
+  const contractsRoutes = myRequire('./backend/routes/contracts.js');
+  const settingsRoutes = myRequire('./backend/routes/settings.js');
+  const paymentsRoutes = myRequire('./backend/routes/payments.js');
 
   // Register API routes
   app.use('/api', authRoutes);
