@@ -123,24 +123,24 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ settings, onSave, onResetDa
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     <SettingsField label="Nom de l'entreprise">
-                      <input type="text" name="companyName" value={currentSettings.companyName} onChange={handleChange} className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-primary-500 focus:border-primary-500" />
+                      <input type="text" name="companyName" value={currentSettings.companyName || ''} onChange={handleChange} className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-primary-500 focus:border-primary-500" />
                     </SettingsField>
                     <SettingsField label="Matricule Fiscal">
-                      <input type="text" name="fiscalId" value={currentSettings.fiscalId} onChange={handleChange} className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3" />
+                      <input type="text" name="fiscalId" value={currentSettings.fiscalId || ''} onChange={handleChange} className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3" />
                     </SettingsField>
                     <div className="md:col-span-2">
                        <SettingsField label="Adresse">
-                          <textarea name="companyAddress" value={currentSettings.companyAddress} onChange={handleChange} rows={2} className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3"></textarea>
+                          <textarea name="companyAddress" value={currentSettings.companyAddress || ''} onChange={handleChange} rows={2} className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3"></textarea>
                        </SettingsField>
                     </div>
                     <SettingsField label="Site Web">
-                      <input type="text" name="companyWebsite" value={currentSettings.companyWebsite} onChange={handleChange} className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3" />
+                      <input type="text" name="companyWebsite" value={currentSettings.companyWebsite || ''} onChange={handleChange} className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3" />
                     </SettingsField>
                      <SettingsField label="Téléphone">
-                       <input type="text" name="companyPhone" value={currentSettings.companyPhone} onChange={handleChange} className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3" />
+                       <input type="text" name="companyPhone" value={currentSettings.companyPhone || ''} onChange={handleChange} className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3" />
                      </SettingsField>
                      <SettingsField label="Email de l'entreprise">
-                       <input type="email" name="companyEmail" value={currentSettings.companyEmail} onChange={handleChange} className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3" />
+                       <input type="email" name="companyEmail" value={currentSettings.companyEmail || ''} onChange={handleChange} className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3" />
                      </SettingsField>
                     <div className="md:col-span-2">
                       <SettingsField label="Logo de l'entreprise">
@@ -176,22 +176,22 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ settings, onSave, onResetDa
                 </div>
                  <div className="grid grid-cols-2 md:grid-cols-3 gap-6">
                      <SettingsField label="Devise">
-                        <input type="text" name="currencySymbol" value={currentSettings.currencySymbol} onChange={handleChange} className="mt-1 block w-full border border-gray-300 rounded-md p-2 focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-all" />
+                        <input type="text" name="currencySymbol" value={currentSettings.currencySymbol || ''} onChange={handleChange} className="mt-1 block w-full border border-gray-300 rounded-md p-2 focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-all" />
                      </SettingsField>
                      <SettingsField label="Taux TVA (%)">
-                        <input type="number" name="taxRate" value={Math.round(currentSettings.taxRate)} onChange={handleChange} className="mt-1 block w-full border border-gray-300 rounded-md p-2 focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-all" />
+                        <input type="number" name="taxRate" value={Math.round(currentSettings.taxRate || 0)} onChange={handleChange} className="mt-1 block w-full border border-gray-300 rounded-md p-2 focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-all" />
                      </SettingsField>
                       <SettingsField label="Loyer/Caisse/Jour">
-                         <input type="number" step="1" name="rentPerCratePerDay" value={Math.round(currentSettings.rentPerCratePerDay)} onChange={handleChange} className="mt-1 block w-full border border-gray-300 rounded-md p-2 focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-all" />
+                         <input type="number" step="1" name="rentPerCratePerDay" value={Math.round(currentSettings.rentPerCratePerDay || 0)} onChange={handleChange} className="mt-1 block w-full border border-gray-300 rounded-md p-2 focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-all" />
                       </SettingsField>
                      <SettingsField label="Caution par Caisse">
-                        <input type="number" step="1" name="cautionPerCrate" value={Math.round(currentSettings.cautionPerCrate)} onChange={handleChange} className="mt-1 block w-full border border-gray-300 rounded-md p-2 focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-all" />
+                        <input type="number" step="1" name="cautionPerCrate" value={Math.round(currentSettings.cautionPerCrate || 0)} onChange={handleChange} className="mt-1 block w-full border border-gray-300 rounded-md p-2 focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-all" />
                      </SettingsField>
                      <SettingsField label="Poids Caisse Vide (kg)">
-                        <input type="number" step="1" name="emptyCrateWeight" value={Math.round(currentSettings.emptyCrateWeight)} onChange={handleChange} className="mt-1 block w-full border border-gray-300 rounded-md p-2 focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-all" />
+                        <input type="number" step="1" name="emptyCrateWeight" value={Math.round(currentSettings.emptyCrateWeight || 0)} onChange={handleChange} className="mt-1 block w-full border border-gray-300 rounded-md p-2 focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-all" />
                      </SettingsField>
                      <SettingsField label="Stock Total Caisses">
-                        <input type="number" name="totalAvailableCrates" value={Math.round(currentSettings.totalAvailableCrates)} onChange={handleChange} className="mt-1 block w-full border border-gray-300 rounded-md p-2 focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-all" />
+                        <input type="number" name="totalAvailableCrates" value={Math.round(currentSettings.totalAvailableCrates || 0)} onChange={handleChange} className="mt-1 block w-full border border-gray-300 rounded-md p-2 focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-all" />
                      </SettingsField>
                  </div>
             </div>

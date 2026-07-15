@@ -9,13 +9,20 @@ interface AddClientModalProps {
 }
 
 const AddClientModal: React.FC<AddClientModalProps> = ({ isOpen, onClose, onSave, clientToEdit }) => {
-  const [client, setClient] = useState({ nom: '', prenom: '', cin: '', telephone: '', caissesReservees: 0 });
+  const [client, setClient] = useState({ nom: '', prenom: '', cin: '', telephone: '', email: '', caissesReservees: 0 });
 
   useEffect(() => {
     if (clientToEdit) {
-      setClient(clientToEdit);
+      setClient({
+        nom: clientToEdit.nom || '',
+        prenom: clientToEdit.prenom || '',
+        cin: clientToEdit.cin || '',
+        telephone: clientToEdit.telephone || '',
+        email: clientToEdit.email || '',
+        caissesReservees: clientToEdit.caissesReservees || 0
+      });
     } else {
-      setClient({ nom: '', prenom: '', cin: '', telephone: '', caissesReservees: 0 });
+      setClient({ nom: '', prenom: '', cin: '', telephone: '', email: '', caissesReservees: 0 });
     }
   }, [clientToEdit, isOpen]);
 

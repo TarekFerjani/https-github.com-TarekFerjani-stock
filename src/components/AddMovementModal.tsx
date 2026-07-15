@@ -424,13 +424,13 @@ const AddMovementModal: React.FC<AddMovementModalProps> = ({ isOpen, onClose, on
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-gray-700">Statut Paiement</label>
-                    <select name="paymentStatus" value={(movementData as MovementLocationOut).paymentStatus} onChange={handleChange} className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3">
+                    <select name="paymentStatus" value={(movementData as MovementLocationOut).paymentStatus || 'En attente'} onChange={handleChange} className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3">
                       <option value="En attente">En attente</option>
                       <option value="Payé">Payé</option>
                     </select>
                   </div>
                 </div>
-                <label><input type="checkbox" name="cautionAppliquee" checked={(movementData as MovementLocationOut).cautionAppliquee} onChange={handleChange} /> Appliquer la caution</label>
+                <label><input type="checkbox" name="cautionAppliquee" checked={!!(movementData as MovementLocationOut).cautionAppliquee} onChange={handleChange} /> Appliquer la caution</label>
                 {movementData.cautionAppliquee && (
                   <div className="p-3 bg-blue-50 border border-blue-200 rounded-md text-sm text-blue-800">
                     <p>Caution à déduire ({settings.cautionPerCrate} {settings.currencySymbol}/caisse) : <strong>{Math.round((movementData as any).caution || 0)}</strong> {settings.currencySymbol}</p>

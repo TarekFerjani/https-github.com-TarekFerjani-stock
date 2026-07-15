@@ -27,6 +27,7 @@ interface ClientMetrics {
 
 const ReportsPage: React.FC<ReportsPageProps> = ({ movements, settings, rooms, locations, invoices, clients }) => {
   const [selectedClientId, setSelectedClientId] = useState<string | null>(null);
+  const [showCurve, setShowCurve] = useState(true);
 
   const clientMetricsList = useMemo<ClientMetrics[]>(() => {
     const colors = [
@@ -200,13 +201,79 @@ const ReportsPage: React.FC<ReportsPageProps> = ({ movements, settings, rooms, l
     return clientMetricsList.find(c => c.id === selectedClientId) || null;
   }, [selectedClientId, clientMetricsList]);
 
-  // Calculate limits & values for the Matrix SVG Map
-  const matrixConfig = useMemo(() => {
-    if (clientMetricsList.length === 0) return null;
-    const maxCr = Math.max(...clientMetricsList.map(c => c.emptyCrates), 10);
-    const maxPend = Math.max(...clientMetricsList.map(c => c.pendingAmount), 500);
-    return { maxCr, maxPend };
+  // Calculate limits & values for the multi-axis curve
+  const maxCrates = useMemo(() => {
+    if (clientMetricsList.length === 0) return 10;
+    return Math.max(...clientMetricsList.map(c => c.emptyCrates), 10);
   }, [clientMetricsList]);
+
+  const maxPayments = useMemo(() => {
+    if (clientMetricsList.length === 0) return 500;
+    return Math.max(...clientMetricsList.map(c => c.pendingAmount), 500);
+  }, [clientMetricsList]);
+
+  // Memoize coordinates for drawing dual comparison curves
+  const curvePoints = useMemo(() => {
+    if (clientMetricsList.length === 0) return [];
+    
+    const paddingLeft = 60;
+    const paddingRight = 60;
+    const paddingTop = 40;
+    const paddingBottom = 60;
+
+    const chartWidth = 600 - paddingLeft - paddingRight;
+    const chartHeight = 400 - paddingTop - paddingBottom;
+    const N = clientMetricsList.length;
+
+    const sortedList = [...clientMetricsList].sort((a, b) => a.name.localeCompare(b.name));
+
+    return sortedList.map((client, i) => {
+      const cx = paddingLeft + (N > 1 ? (i / (N - 1)) * chartWidth : chartWidth / 2);
+      const cyCrates = paddingTop + chartHeight - (client.emptyCrates / maxCrates) * chartHeight;
+      const cyPayments = paddingTop + chartHeight - (client.pendingAmount / maxPayments) * chartHeight;
+      return { cx, cyCrates, cyPayments, client };
+    });
+  }, [clientMetricsList, maxCrates, maxPayments]);
+
+  const cratesCurvePath = useMemo(() => {
+    if (curvePoints.length === 0) return "";
+    if (curvePoints.length === 1) return `M ${curvePoints[0].cx} ${curvePoints[0].cyCrates}`;
+    
+    let d = `M ${curvePoints[0].cx} ${curvePoints[0].cyCrates}`;
+    for (let i = 0; i < curvePoints.length - 1; i++) {
+      const curr = curvePoints[i];
+      const next = curvePoints[i + 1];
+      const controlX = (curr.cx + next.cx) / 2;
+      d += ` C ${controlX} ${curr.cyCrates}, ${controlX} ${next.cyCrates}, ${next.cx} ${next.cyCrates}`;
+    }
+    return d;
+  }, [curvePoints]);
+
+  const paymentsCurvePath = useMemo(() => {
+    if (curvePoints.length === 0) return "";
+    if (curvePoints.length === 1) return `M ${curvePoints[0].cx} ${curvePoints[0].cyPayments}`;
+    
+    let d = `M ${curvePoints[0].cx} ${curvePoints[0].cyPayments}`;
+    for (let i = 0; i < curvePoints.length - 1; i++) {
+      const curr = curvePoints[i];
+      const next = curvePoints[i + 1];
+      const controlX = (curr.cx + next.cx) / 2;
+      d += ` C ${controlX} ${curr.cyPayments}, ${controlX} ${next.cyPayments}, ${next.cx} ${next.cyPayments}`;
+    }
+    return d;
+  }, [curvePoints]);
+
+  const cratesAreaPath = useMemo(() => {
+    if (curvePoints.length === 0) return "";
+    const yBaseline = 400 - 60;
+    return `${cratesCurvePath} L ${curvePoints[curvePoints.length - 1].cx} ${yBaseline} L ${curvePoints[0].cx} ${yBaseline} Z`;
+  }, [curvePoints, cratesCurvePath]);
+
+  const paymentsAreaPath = useMemo(() => {
+    if (curvePoints.length === 0) return "";
+    const yBaseline = 400 - 60;
+    return `${paymentsCurvePath} L ${curvePoints[curvePoints.length - 1].cx} ${yBaseline} L ${curvePoints[0].cx} ${yBaseline} Z`;
+  }, [curvePoints, paymentsCurvePath]);
 
   const paymentsByClientData = useMemo(() => {
     const clientMap = new Map<string, number>();
@@ -272,116 +339,216 @@ const ReportsPage: React.FC<ReportsPageProps> = ({ movements, settings, rooms, l
         <StatCard title="Contrats actifs" value={reportsData.reportStats.activeLocations.toString()} icon="users" />
       </div>
 
-      {/* HIGHLY CREATIVE INTERACTIVE QUADRANT risk MATRIX */}
+      {/* HIGHLY CREATIVE INTERACTIVE COMPARATIVE CURVE */}
       <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
         <div className="flex flex-col md:flex-row md:items-center justify-between mb-6 gap-4">
           <div>
-            <h3 className="text-lg font-bold text-gray-800">Matrice Interactive : Caisses Vides &amp; Paiements Clients</h3>
-            <p className="text-xs text-gray-500 mt-1">Surveillez l'équilibre entre les caisses détenues par les clients et leur solde financier dû.</p>
+            <h3 className="text-lg font-bold text-gray-800">Courbe Comparative : Caisses Vides &amp; Paiements Clients</h3>
+            <p className="text-xs text-gray-500 mt-1">Analysez l'équilibre entre les caisses détenues par les clients (axe gauche) et leur encours financier restant dû (axe droit).</p>
           </div>
-          <div className="flex items-center gap-2">
-            <span className="inline-block w-3 h-3 bg-red-500 rounded-full"></span>
-            <span className="text-xs text-gray-600 font-medium mr-2">Risque Élevé</span>
-            <span className="inline-block w-3 h-3 bg-amber-500 rounded-full"></span>
-            <span className="text-xs text-gray-600 font-medium mr-2">Caisses dehors</span>
-            <span className="inline-block w-3 h-3 bg-blue-500 rounded-full"></span>
-            <span className="text-xs text-gray-600 font-medium">Stable / En attente</span>
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              onClick={() => setShowCurve(!showCurve)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all flex items-center space-x-1.5 ${
+                showCurve 
+                  ? 'bg-primary-50 border-primary-200 text-primary-700 shadow-xs' 
+                  : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'
+              }`}
+            >
+              <svg className="w-3.5 h-3.5 text-primary-500" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 18L9 11.25l4.306 4.307a11.95 11.95 0 015.814-5.519l2.74-1.22m0 0l-5.94-2.281m5.94 2.28-2.28 5.941" />
+              </svg>
+              <span>{showCurve ? "Masquer la Courbe" : "Afficher la Courbe"}</span>
+            </button>
+            <div className="flex items-center gap-4 text-xs font-medium">
+              <div className="flex items-center gap-1.5">
+                <span className="inline-block w-3 h-1.5 bg-amber-500 rounded-sm"></span>
+                <span className="text-gray-600">Caisses Vides (Axe gauche)</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="inline-block w-3 h-1.5 bg-blue-500 rounded-sm"></span>
+                <span className="text-gray-600">Paiements Dus (Axe droit)</span>
+              </div>
+            </div>
           </div>
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-          {/* Interactive SVG Matrix View */}
+          {/* Interactive SVG Curve View */}
           <div className="lg:col-span-2 bg-gray-50 p-4 rounded-xl border border-gray-100 relative">
-            {matrixConfig && clientMetricsList.length > 0 ? (
+            {curvePoints.length > 0 ? (
               <div className="w-full relative h-[400px]">
                 {/* Visual grid background */}
                 <svg className="w-full h-full overflow-visible" viewBox="0 0 600 400" preserveAspectRatio="none">
-                  {/* Quadrant Lines */}
-                  <line x1="300" y1="20" x2="300" y2="340" stroke="#cbd5e1" strokeDasharray="4 4" strokeWidth="1.5" />
-                  <line x1="60" y1="180" x2="570" y2="180" stroke="#cbd5e1" strokeDasharray="4 4" strokeWidth="1.5" />
+                  <defs>
+                    <linearGradient id="crates-curve-grad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="#f59e0b" stopOpacity="0.15" />
+                      <stop offset="100%" stopColor="#f59e0b" stopOpacity="0.0" />
+                    </linearGradient>
+                    <linearGradient id="payments-curve-grad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="#3b82f6" stopOpacity="0.15" />
+                      <stop offset="100%" stopColor="#3b82f6" stopOpacity="0.0" />
+                    </linearGradient>
+                  </defs>
 
-                  {/* Quadrant Text Labels */}
-                  <text x="70" y="35" className="fill-blue-500 text-[10px] font-bold tracking-wider opacity-80 uppercase">💰 Paiements Attente (Peu de caisses)</text>
-                  <text x="560" y="35" textAnchor="end" className="fill-red-500 text-[10px] font-bold tracking-wider opacity-90 uppercase">⚠️ Risque Élevé (Beaucoup de caisses &amp; Dettes)</text>
-                  <text x="70" y="330" className="fill-emerald-600 text-[10px] font-bold tracking-wider opacity-80 uppercase">✅ Profil Stable (Faibles encours)</text>
-                  <text x="560" y="330" textAnchor="end" className="fill-amber-600 text-[10px] font-bold tracking-wider opacity-80 uppercase">📦 Caisses Dehors (Peu de dettes)</text>
+                  {/* Horizontal Grid Lines and Y scales */}
+                  {Array.from({ length: 5 + 1 }).map((_, i) => {
+                    const y = 40 + 300 - (i / 5) * 300;
+                    const valueCrates = (i / 5) * maxCrates;
+                    const valuePayments = (i / 5) * maxPayments;
+                    return (
+                      <g key={`grid-y-${i}`}>
+                        {/* Left Y scale */}
+                        <text x="50" y={y} textAnchor="end" alignmentBaseline="middle" fontSize="9" className="fill-amber-600 font-bold">
+                          {Math.round(valueCrates)}
+                        </text>
+                        {/* Grid Line */}
+                        <line x1="60" y1={y} x2="540" y2={y} stroke="#e2e8f0" strokeDasharray="2 2" strokeWidth="1" />
+                        {/* Right Y scale */}
+                        <text x="550" y={y} textAnchor="start" alignmentBaseline="middle" fontSize="9" className="fill-blue-600 font-bold">
+                          {Math.round(valuePayments)} {settings.currencySymbol}
+                        </text>
+                      </g>
+                    );
+                  })}
 
-                  {/* Axis Titles */}
-                  <text x="300" y="380" textAnchor="middle" className="fill-gray-600 text-xs font-semibold">Nombre de Caisses Vides chez le Client →</text>
-                  <text x="20" y="180" textAnchor="middle" transform="rotate(-90,20,180)" className="fill-gray-600 text-xs font-semibold">Solde Restant Dû ({settings.currencySymbol}) →</text>
+                  {/* X-Axis Ticks & Labels */}
+                  {curvePoints.map((pt) => {
+                    const nameLabel = pt.client.name.split(' ').map(n => n[0]).join('');
+                    return (
+                      <g key={`xtick-${pt.client.id}`}>
+                        <line x1={pt.cx} y1="340" x2={pt.cx} y2="345" stroke="#cbd5e1" strokeWidth="1.5" />
+                        <text 
+                          x={pt.cx} 
+                          y="360" 
+                          textAnchor="middle" 
+                          fontSize="9" 
+                          className="fill-gray-500 font-bold"
+                        >
+                          {nameLabel}
+                        </text>
+                      </g>
+                    );
+                  })}
 
-                  {/* Axis scale values */}
-                  <text x="60" y="360" textAnchor="middle" className="fill-gray-400 text-[10px]">0</text>
-                  <text x="300" y="360" textAnchor="middle" className="fill-gray-400 text-[10px]">{Math.round(matrixConfig.maxCr / 2)} caisses</text>
-                  <text x="570" y="360" textAnchor="middle" className="fill-gray-400 text-[10px]">{matrixConfig.maxCr} caisses</text>
+                  {/* Curve fills */}
+                  {showCurve && (
+                    <>
+                      {cratesAreaPath && (
+                        <path 
+                          d={cratesAreaPath} 
+                          fill="url(#crates-curve-grad)" 
+                          className="transition-all duration-500 ease-in-out pointer-events-none" 
+                        />
+                      )}
+                      {paymentsAreaPath && (
+                        <path 
+                          d={paymentsAreaPath} 
+                          fill="url(#payments-curve-grad)" 
+                          className="transition-all duration-500 ease-in-out pointer-events-none" 
+                        />
+                      )}
+                    </>
+                  )}
 
-                  <text x="50" y="340" textAnchor="end" className="fill-gray-400 text-[10px]">0</text>
-                  <text x="50" y="180" textAnchor="end" className="fill-gray-400 text-[10px]">{Math.round(matrixConfig.maxPend / 2)} {settings.currencySymbol}</text>
-                  <text x="50" y="25" textAnchor="end" className="fill-gray-400 text-[10px]">{matrixConfig.maxPend} {settings.currencySymbol}</text>
+                  {/* Curve lines */}
+                  {showCurve && (
+                    <>
+                      {cratesCurvePath && (
+                        <path 
+                          d={cratesCurvePath} 
+                          fill="none" 
+                          stroke="#f59e0b" 
+                          strokeWidth="3" 
+                          strokeLinecap="round" 
+                          strokeLinejoin="round"
+                          className="transition-all duration-500 ease-in-out pointer-events-none opacity-90" 
+                        />
+                      )}
+                      {paymentsCurvePath && (
+                        <path 
+                          d={paymentsCurvePath} 
+                          fill="none" 
+                          stroke="#3b82f6" 
+                          strokeWidth="3" 
+                          strokeLinecap="round" 
+                          strokeLinejoin="round"
+                          className="transition-all duration-500 ease-in-out pointer-events-none opacity-90" 
+                        />
+                      )}
+                    </>
+                  )}
 
-                  {/* Client Data Points */}
-                  {clientMetricsList.map((client) => {
-                    // Coordinates calculation
-                    const paddingLeft = 60;
-                    const paddingRight = 30;
-                    const paddingTop = 20;
-                    const paddingBottom = 60;
-
-                    const plotWidth = 600 - paddingLeft - paddingRight;
-                    const plotHeight = 400 - paddingTop - paddingBottom;
-
-                    // Map emptyCrates onto X (paddingLeft to 600 - paddingRight)
-                    const cx = paddingLeft + (client.emptyCrates / matrixConfig.maxCr) * plotWidth;
-                    // Map pendingAmount onto Y (paddingTop to 400 - paddingBottom) -> SVG Y goes down, so we invert
-                    const cy = paddingTop + plotHeight - (client.pendingAmount / matrixConfig.maxPend) * plotHeight;
-
-                    const isSelected = selectedClientId === client.id;
+                  {/* Interactive client nodes / points on curve */}
+                  {curvePoints.map((pt) => {
+                    const isSelected = selectedClientId === pt.client.id;
                     const isAnySelected = selectedClientId !== null;
 
                     return (
                       <g 
-                        key={client.id}
+                        key={`interactive-${pt.client.id}`}
                         className="cursor-pointer transition-all duration-300"
-                        onMouseEnter={() => setSelectedClientId(client.id)}
+                        onMouseEnter={() => setSelectedClientId(pt.client.id)}
                         onMouseLeave={() => setSelectedClientId(null)}
-                        onClick={() => setSelectedClientId(isSelected ? null : client.id)}
-                        style={{ opacity: !isAnySelected || isSelected ? 1 : 0.35 }}
+                        onClick={() => setSelectedClientId(isSelected ? null : pt.client.id)}
+                        style={{ opacity: !isAnySelected || isSelected ? 1 : 0.4 }}
                       >
-                        {/* Interactive Ripple rings for higher risk */}
-                        {client.riskScore > 50 && (
+                        {/* Hover vertical tracking line */}
+                        {isSelected && (
+                          <line x1={pt.cx} y1="40" x2={pt.cx} y2="340" stroke="#94a3b8" strokeWidth="1" strokeDasharray="4 4" />
+                        )}
+
+                        {/* Ripple animation for high-risk clients */}
+                        {pt.client.riskScore > 50 && (
                           <circle 
-                            cx={cx} 
-                            cy={cy} 
-                            r={isSelected ? 26 : 16} 
+                            cx={pt.cx} 
+                            cy={pt.cyPayments} 
+                            r={isSelected ? 20 : 12} 
                             className="animate-ping fill-none" 
-                            stroke={client.riskScore > 75 ? '#ef4444' : '#f59e0b'} 
-                            strokeWidth="1" 
+                            stroke="#ef4444" 
+                            strokeWidth="1.5" 
                             style={{ animationDuration: '3s' }}
                           />
                         )}
-                        {/* Main Circle */}
+
+                        {/* Crates Point Circle */}
                         <circle 
-                          cx={cx} 
-                          cy={cy} 
-                          r={isSelected ? 16 : 10} 
-                          fill={client.color} 
-                          className="shadow-md transition-all duration-300 hover:scale-125 hover:stroke-white hover:stroke-2"
+                          cx={pt.cx} 
+                          cy={pt.cyCrates} 
+                          r={isSelected ? 8 : 5} 
+                          fill="#ffffff" 
+                          stroke="#f59e0b"
+                          strokeWidth={isSelected ? 3 : 2}
+                          className="shadow-sm transition-all duration-300"
                         />
-                        {/* Text Label next to circle */}
-                        <text 
-                          x={cx + (isSelected ? 20 : 14)} 
-                          y={cy + 4} 
-                          className="text-[10px] font-bold fill-gray-800 select-none bg-white px-1 pointer-events-none"
-                        >
-                          {client.name.split(' ').map(n => n[0]).join('')}
-                        </text>
+
+                        {/* Payments Point Circle */}
+                        <circle 
+                          cx={pt.cx} 
+                          cy={pt.cyPayments} 
+                          r={isSelected ? 8 : 5} 
+                          fill="#ffffff" 
+                          stroke="#3b82f6"
+                          strokeWidth={isSelected ? 3 : 2}
+                          className="shadow-sm transition-all duration-300"
+                        />
+
+                        {/* Hidden hover hit box for easier interaction */}
+                        <rect
+                          x={pt.cx - 20}
+                          y="40"
+                          width="40"
+                          height="300"
+                          fill="transparent"
+                          className="cursor-pointer"
+                        />
                       </g>
                     );
                   })}
                 </svg>
               </div>
             ) : (
-              <div className="flex items-center justify-center h-[350px] text-gray-400">Aucun client actif à afficher dans la matrice.</div>
+              <div className="flex items-center justify-center h-[350px] text-gray-400">Aucun client actif à afficher sur la courbe.</div>
             )}
           </div>
 
