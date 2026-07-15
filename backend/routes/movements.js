@@ -407,49 +407,10 @@ router.put('/:id', async (req, res) => {
 });
 
 // ============================================================
-// DELETE - Delete a movement and associated records
+// DELETE - Delete a movement and associated records (DISABLED)
 // ============================================================
 router.delete('/:id', async (req, res) => {
-    const { id } = req.params;
-    const connection = await pool.connect();
-    try {
-        await connection.query('BEGIN');
-
-        const movementResult = await connection.query('SELECT * FROM movements WHERE id = $1', [id]);
-        const movement = movementResult.rows[0];
-        if (!movement) throw new Error('Mouvement introuvable');
-
-        const type = movement.type;
-        const nbCaisse = parseInt(movement.nbcaisse ?? movement.nbCaisse ?? movement.nbcaisseretournees ?? movement.nbCaisseRetournees) || 0;
-        const movClientId = movement.clientid ?? movement.clientId;
-        const movProductId = movement.productid ?? movement.productId;
-        const movRoomId = movement.roomid ?? movement.roomId;
-
-        if (type === 'Vente' || type === 'Fin de Location') {
-            await fifoRestore(connection, movClientId, movProductId, movRoomId, nbCaisse);
-        } else if (type === 'Location') {
-            const locResult = await connection.query('SELECT * FROM locations WHERE id = $1', [id]);
-            const loc = locResult.rows[0];
-            const locNb = Number(loc?.nbcaisse ?? loc?.nbCaisse ?? 0);
-            const locInitial = Number(loc?.initialnbcaisse ?? loc?.initialNbCaisse ?? 0);
-            if (loc && locNb < locInitial) {
-                throw new Error("Impossible de supprimer cette entrée : des sorties ont déjà été effectuées sur ce lot.");
-            }
-        }
-
-        await connection.query('DELETE FROM invoices WHERE id = $1', [id]);
-        await connection.query('DELETE FROM locations WHERE id = $1', [id]);
-        await connection.query('DELETE FROM movements WHERE id = $1', [id]);
-
-        await connection.query('COMMIT');
-        res.json({ success: true });
-    } catch (error) {
-        if (connection) await connection.query('ROLLBACK');
-        console.error(`Error deleting movement ${id}:`, error);
-        res.status(500).json({ message: error.message });
-    } finally {
-        if (connection) connection.release();
-    }
+    return res.status(403).json({ message: "La suppression d'une opération de stock enregistrée n'est pas autorisée." });
 });
 
 module.exports = router;

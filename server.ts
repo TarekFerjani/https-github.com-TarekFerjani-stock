@@ -3,36 +3,27 @@ import path from "path";
 import cors from "cors";
 import dotenv from "dotenv";
 import { createServer as createViteServer } from "vite";
-import { createRequire } from "module";
 
 // Declare require so TypeScript compiler is happy
 declare const require: any;
 
-const resolvedUrl = typeof import.meta !== "undefined" && import.meta.url
-  ? import.meta.url
-  : "file://" + process.cwd() + "/server.js";
-
-const myRequire = typeof require !== "undefined"
-  ? require
-  : createRequire(resolvedUrl);
-
 // Load dotenv
 dotenv.config();
 
-// Import DB pool to run load validation with absolute path
-const pool = myRequire(path.join(process.cwd(), "backend/db.js"));
+// Import DB pool to run load validation
+const pool = require("./backend/db.js");
 
-// Load and mount backend routes with absolute path
-const authRoutes = myRequire(path.join(process.cwd(), "backend/routes/auth.js"));
-const clientRoutes = myRequire(path.join(process.cwd(), "backend/routes/clients.js"));
-const productRoutes = myRequire(path.join(process.cwd(), "backend/routes/products.js"));
-const roomRoutes = myRequire(path.join(process.cwd(), "backend/routes/rooms.js"));
-const movementRoutes = myRequire(path.join(process.cwd(), "backend/routes/movements.js"));
-const locationRoutes = myRequire(path.join(process.cwd(), "backend/routes/locations.js"));
-const invoiceRoutes = myRequire(path.join(process.cwd(), "backend/routes/invoices.js"));
-const contractsRoutes = myRequire(path.join(process.cwd(), "backend/routes/contracts.js"));
-const settingsRoutes = myRequire(path.join(process.cwd(), "backend/routes/settings.js"));
-const paymentsRoutes = myRequire(path.join(process.cwd(), "backend/routes/payments.js"));
+// Load and mount backend routes
+const authRoutes = require("./backend/routes/auth.js");
+const clientRoutes = require("./backend/routes/clients.js");
+const productRoutes = require("./backend/routes/products.js");
+const roomRoutes = require("./backend/routes/rooms.js");
+const movementRoutes = require("./backend/routes/movements.js");
+const locationRoutes = require("./backend/routes/locations.js");
+const invoiceRoutes = require("./backend/routes/invoices.js");
+const contractsRoutes = require("./backend/routes/contracts.js");
+const settingsRoutes = require("./backend/routes/settings.js");
+const paymentsRoutes = require("./backend/routes/payments.js");
 
 async function startServer() {
   const app = express();

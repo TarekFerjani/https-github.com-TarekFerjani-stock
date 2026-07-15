@@ -100,48 +100,9 @@ router.post('/reglements', async (req, res) => {
     }
 });
 
-// DELETE a reglement
+// DELETE a reglement (DISABLED)
 router.delete('/reglements/:id', async (req, res) => {
-    const { id } = req.params;
-    try {
-        const regResult = await pool.query('SELECT * FROM reglements WHERE id = $1', [id]);
-        const reg = regResult.rows[0];
-        
-        await pool.query('DELETE FROM reglements WHERE id = $1', [id]);
-
-        if (reg && (reg.invoiceid || reg.invoiceId)) {
-            const invId = reg.invoiceid || reg.invoiceId;
-
-            // Recalculate status of the invoice/movement
-            let totalAmount = 0;
-            const invoiceRes = await pool.query('SELECT montanttotal FROM invoices WHERE id = $1', [invId]);
-            if (invoiceRes.rows.length > 0) {
-                totalAmount = Number(invoiceRes.rows[0].montanttotal ?? 0);
-            } else {
-                const movementRes = await pool.query('SELECT montanttotal, loyer, caution FROM movements WHERE id = $1', [invId]);
-                if (movementRes.rows.length > 0) {
-                    const mov = movementRes.rows[0];
-                    totalAmount = Number(mov.montanttotal ?? mov.loyer ?? mov.caution ?? 0);
-                }
-            }
-
-            const reglementsRes = await pool.query('SELECT amount FROM reglements WHERE invoiceid = $1', [invId]);
-            let totalPaid = 0;
-            for (const r of reglementsRes.rows) {
-                totalPaid += Number(r.amount ?? 0);
-            }
-
-            const newStatus = (totalPaid >= totalAmount) ? 'Payé' : 'En attente';
-
-            await pool.query("UPDATE movements SET paymentStatus = $1 WHERE id = $2", [newStatus, invId]);
-            await pool.query("UPDATE invoices SET paymentStatus = $1 WHERE id = $2", [newStatus, invId]);
-        }
-
-        res.json({ message: 'Règlement supprimé avec succès.' });
-    } catch (error) {
-        console.error('Error deleting reglement:', error);
-        res.status(500).json({ message: error.message });
-    }
+    return res.status(403).json({ message: "La suppression d'un règlement n'est pas autorisée." });
 });
 
 
@@ -194,37 +155,9 @@ router.post('/avances', async (req, res) => {
     }
 });
 
-// DELETE an avance
+// DELETE an avance (DISABLED)
 router.delete('/avances/:id', async (req, res) => {
-    const { id } = req.params;
-    try {
-        // Retrieve the advance to adjust the contract if needed
-        const avanceRes = await pool.query('SELECT * FROM avances WHERE id = $1', [id]);
-        const avance = avanceRes.rows[0];
-
-        if (avance) {
-            const contractId = avance.contractid || avance.contractId;
-            const amount = Number(avance.amount ?? avance.montant ?? 0);
-            
-            if (contractId) {
-                const contractRes = await pool.query('SELECT * FROM contracts WHERE id = $1', [contractId]);
-                if (contractRes.rows.length > 0) {
-                    const currentAvance = Number(contractRes.rows[0].avance || 0);
-                    const newAvance = Math.max(0, currentAvance - amount);
-                    await pool.query(
-                        'UPDATE contracts SET avance = $1 WHERE id = $2',
-                        [newAvance, contractId]
-                    );
-                }
-            }
-        }
-
-        await pool.query('DELETE FROM avances WHERE id = $1', [id]);
-        res.json({ message: 'Avance supprimée avec succès.' });
-    } catch (error) {
-        console.error('Error deleting avance:', error);
-        res.status(500).json({ message: error.message });
-    }
+    return res.status(403).json({ message: "La suppression d'une avance n'est pas autorisée." });
 });
 
 module.exports = router;
