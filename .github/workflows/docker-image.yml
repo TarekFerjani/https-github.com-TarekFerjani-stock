@@ -26,5 +26,5 @@ jobs:
         file: ./Dockerfile
         push: true
         tags: |
-          tarekferjani/stock-app:latest
-          tarekferjani/stock-app:${{ github.sha }}
+          ferjani90/stock-app:latest
+          ferjani90/stock-app:${{ github.sha }}
