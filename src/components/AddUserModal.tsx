@@ -36,7 +36,7 @@ const pageLabels: Record<Page, string> = {
   users: "Utilisateurs",
   stock: "Stock",
   contrats: "Contrats",
-  reglements: "Règlements & Avances",
+  reglements: "Paiements",
 };
 
 const AddUserModal: React.FC<AddUserModalProps> = ({ isOpen, onClose, onSave, userToEdit, users }) => {

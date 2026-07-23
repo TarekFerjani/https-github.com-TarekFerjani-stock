@@ -7,9 +7,10 @@ interface SettingsPageProps {
     settings: Settings;
     onSave: () => void;
     onResetData: () => void;
+    hasEntries?: boolean;
 }
 
-const SettingsPage: React.FC<SettingsPageProps> = ({ settings, onSave, onResetData }) => {
+const SettingsPage: React.FC<SettingsPageProps> = ({ settings, onSave, onResetData, hasEntries = false }) => {
     const [currentSettings, setCurrentSettings] = useState<Settings>(settings);
     const [isSaving, setIsSaving] = useState(false);
     const [isSavingDb, setIsSavingDb] = useState(false);
@@ -31,13 +32,15 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ settings, onSave, onResetDa
         const fetchDbConfig = async () => {
             try {
                 const config = await settingsService.getDbConfig();
-                setDbConfig({
-                    DB_HOST: config.DB_HOST || '',
-                    DB_PORT: config.DB_PORT || '5432',
-                    DB_USER: config.DB_USER || '',
-                    DB_PASSWORD: config.DB_PASSWORD || '',
-                    DB_DATABASE: config.DB_DATABASE || ''
-                });
+                if (config) {
+                    setDbConfig({
+                        DB_HOST: config.DB_HOST || '',
+                        DB_PORT: config.DB_PORT || '5432',
+                        DB_USER: config.DB_USER || '',
+                        DB_PASSWORD: config.DB_PASSWORD || '',
+                        DB_DATABASE: config.DB_DATABASE || ''
+                    });
+                }
             } catch (err) {
                 console.error("Failed to load DB config", err);
             }
@@ -47,7 +50,7 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ settings, onSave, onResetDa
 
     const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
         const { name, value } = e.target;
-        const numericFields = ['cautionPerCrate', 'emptyCrateWeight', 'taxRate', 'rentPerCratePerDay', 'totalAvailableCrates'];
+        const numericFields = ['cautionPerCrate', 'emptyCrateWeight', 'taxRate', 'rentPerCratePerDay', 'totalAvailableCrates', 'rentIncreaseRate', 'increaseStartMonth'];
         setCurrentSettings(prev => ({ ...prev, [name]: numericFields.includes(name) ? parseFloat(value) || 0 : value }));
     };
 
@@ -69,10 +72,16 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ settings, onSave, onResetDa
     
     const handleSave = async () => {
         setIsSaving(true);
-        await settingsService.saveSettings(currentSettings);
-        setIsSaving(false);
-        onSave();
-        alert('Paramètres enregistrés avec succès !');
+        try {
+            await settingsService.saveSettings(currentSettings);
+            alert('Paramètres enregistrés avec succès !');
+            onSave();
+        } catch (error: any) {
+            console.error('Save settings error:', error);
+            alert('Erreur lors de l\'enregistrement : ' + (error.message || "Une erreur est survenue."));
+        } finally {
+            setIsSaving(false);
+        }
     };
 
     const handleSaveDbConfig = async () => {
@@ -106,11 +115,33 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ settings, onSave, onResetDa
       </div>
     );
 
+    // Calculate effective rent price
+    const baseRent = currentSettings.rentPerCratePerDay || 0;
+    const increaseRate = currentSettings.rentIncreaseRate || 0;
+    const effectiveRent = baseRent + increaseRate;
+
     return (
         <div className="space-y-8 max-w-4xl mx-auto">
             <div>
                 <h1 className="text-2xl font-semibold text-gray-700">Paramètres de l'Application</h1>
             </div>
+
+            {hasEntries && (
+                <div className="bg-blue-50 border-l-4 border-blue-400 p-4 rounded shadow-sm">
+                    <div className="flex">
+                        <div className="flex-shrink-0">
+                            <svg className="h-5 w-5 text-blue-400" viewBox="0 0 20 20" fill="currentColor">
+                                <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+                            </svg>
+                        </div>
+                        <div className="ml-3">
+                            <p className="text-sm text-blue-700 font-medium">
+                                Information : Des données existent déjà. Vous pouvez librement ajuster le Stock Total de Caisses ou les coordonnées de l'entreprise.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             <div className="bg-white p-6 rounded-lg shadow-md border border-gray-100 transition-all hover:shadow-lg">
                 <div className="flex items-center space-x-3 border-b pb-3 mb-6 font-semibold text-gray-800">
@@ -172,7 +203,7 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ settings, onSave, onResetDa
                             <path strokeLinecap="round" strokeLinejoin="round" d="M20.25 7.5l-.625 10.632a2.25 2.25 0 01-2.247 2.118H6.622a2.25 2.25 0 01-2.247-2.118L3.75 7.5M10 11.25h4M3.375 7.5h17.25c.621 0 1.125-.504 1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125z" />
                         </svg>
                     </div>
-                    <h2 className="text-lg">Paramètres des Produits et Locations</h2>
+                    <h2 className="text-lg">Paramètres des Produits et Locations (Mensuels)</h2>
                 </div>
                  <div className="grid grid-cols-2 md:grid-cols-3 gap-6">
                      <SettingsField label="Devise">
@@ -181,17 +212,32 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ settings, onSave, onResetDa
                      <SettingsField label="Taux TVA (%)">
                         <input type="number" name="taxRate" value={Math.round(currentSettings.taxRate || 0)} onChange={handleChange} className="mt-1 block w-full border border-gray-300 rounded-md p-2 focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-all" />
                      </SettingsField>
-                      <SettingsField label="Loyer/Caisse/Jour">
-                         <input type="number" step="1" name="rentPerCratePerDay" value={Math.round(currentSettings.rentPerCratePerDay || 0)} onChange={handleChange} className="mt-1 block w-full border border-gray-300 rounded-md p-2 focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-all" />
+                      <SettingsField label="Loyer de Base">
+                         <input type="number" step="any" name="rentPerCratePerDay" value={currentSettings.rentPerCratePerDay || 0} onChange={handleChange} className="mt-1 block w-full border border-gray-300 rounded-md p-2 focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-all" />
                       </SettingsField>
                      <SettingsField label="Caution par Caisse">
-                        <input type="number" step="1" name="cautionPerCrate" value={Math.round(currentSettings.cautionPerCrate || 0)} onChange={handleChange} className="mt-1 block w-full border border-gray-300 rounded-md p-2 focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-all" />
+                        <input type="number" step="any" name="cautionPerCrate" value={currentSettings.cautionPerCrate || 0} onChange={handleChange} className="mt-1 block w-full border border-gray-300 rounded-md p-2 focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-all" />
                      </SettingsField>
                      <SettingsField label="Poids Caisse Vide (kg)">
-                        <input type="number" step="1" name="emptyCrateWeight" value={Math.round(currentSettings.emptyCrateWeight || 0)} onChange={handleChange} className="mt-1 block w-full border border-gray-300 rounded-md p-2 focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-all" />
+                        <input type="number" step="any" name="emptyCrateWeight" value={currentSettings.emptyCrateWeight || 0} onChange={handleChange} className="mt-1 block w-full border border-gray-300 rounded-md p-2 focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-all" />
                      </SettingsField>
                      <SettingsField label="Stock Total Caisses">
                         <input type="number" name="totalAvailableCrates" value={Math.round(currentSettings.totalAvailableCrates || 0)} onChange={handleChange} className="mt-1 block w-full border border-gray-300 rounded-md p-2 focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-all" />
+                     </SettingsField>
+
+                     <SettingsField label={`Augmentation mensuelle fixe à partir du 1er Janvier (${currentSettings.currencySymbol})`}>
+                        <input type="number" step="any" name="rentIncreaseRate" value={currentSettings.rentIncreaseRate || 0} onChange={handleChange} className="mt-1 block w-full border border-gray-300 rounded-md p-2 focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-all" />
+                     </SettingsField>
+                     <SettingsField label="Règles de Facturation Spécifiques">
+                        <div className="mt-1 text-xs text-blue-600 bg-blue-50 p-2 rounded border border-blue-100">
+                           Le loyer est un <strong>forfait</strong> fixe entre Septembre et fin d'année. L'augmentation fixe de <strong>{currentSettings.rentIncreaseRate || 0} {currentSettings.currencySymbol}</strong> s'applique chaque mois à partir du 1er janvier.
+                         </div>
+                     </SettingsField>
+                     <SettingsField label="Aperçu des Tarifs">
+                        <div className="mt-1 p-2 bg-gray-100 text-gray-600 text-xs font-semibold rounded-md border border-gray-200 space-y-1">
+                           <p>🍂 Sept - Déc : forfait de <span className="text-gray-900 font-bold">{currentSettings.rentPerCratePerDay || 0} {currentSettings.currencySymbol}</span></p>
+                           <p>❄️ Dès le 1er Jan : hausse de <span className="text-gray-900 font-bold">+{currentSettings.rentIncreaseRate || 0} {currentSettings.currencySymbol}</span> chaque mois cumulé (ex: Janvier = +{currentSettings.rentIncreaseRate || 0} {currentSettings.currencySymbol}, Février = +{((currentSettings.rentIncreaseRate || 0) * 2).toFixed(2)} {currentSettings.currencySymbol})</p>
+                        </div>
                      </SettingsField>
                  </div>
             </div>
@@ -289,11 +335,11 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ settings, onSave, onResetDa
                 <p className="text-xs text-gray-500 mt-3">Cette configuration est sauvegardée dans le fichier d'environnement du serveur (<code>.env</code>) et utilisée pour la connexion PostgreSQL.</p>
             </div>
 
-             <div className="flex justify-end pt-4">
+            <div className="flex justify-end pt-4">
                 <button 
                   onClick={handleSave} 
                   disabled={isSaving} 
-                  className="px-8 py-3 bg-primary-600 text-white font-bold rounded-lg shadow-md hover:bg-primary-700 hover:shadow-lg focus:ring-4 focus:ring-primary-100 transition-all disabled:bg-gray-400 flex items-center space-x-2"
+                  className="px-8 py-3 bg-primary-600 text-white font-bold rounded-lg shadow-md hover:bg-primary-700 hover:shadow-lg focus:ring-4 focus:ring-primary-100 transition-all disabled:bg-gray-400 flex items-center space-x-2 cursor-pointer"
                 >
                     {isSaving ? (
                       <>

@@ -1,9 +1,12 @@
 import React, { useState, useMemo } from 'react';
-import { Movement, MovementType, Product, Client, Room, Location, Settings } from '../types';
+import { Movement, MovementType, Product, Client, Room, Location, Settings, Reglement } from '../types';
 import AddMovementModal from './AddMovementModal';
+import { AuditLogsView } from './AuditLogsView';
 import { movementService } from '../services/movementService';
+import { authService } from '../services/authService';
 import { jsPDF } from 'jspdf';
 import * as QRCode from 'qrcode';
+import { isMovementPaid } from '../utils/paymentUtils';
 
 interface StockPageProps {
   movements: Movement[];
@@ -15,13 +18,15 @@ interface StockPageProps {
   fetchAllData: () => Promise<void>;
   isLoading: boolean;
   searchTerm: string;
+  reglements: Reglement[];
 }
 
 const StockPage: React.FC<StockPageProps> = ({ 
-  movements, products, clients, rooms, locations, settings, fetchAllData, isLoading, searchTerm 
+  movements, products, clients, rooms, locations, settings, fetchAllData, isLoading, searchTerm, reglements 
 }) => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [movementToEdit, setMovementToEdit] = useState<Movement | null>(null);
+  const [activeTab, setActiveTab] = useState<'movements' | 'audit'>('movements');
 
   const filteredMovements = useMemo(() => {
     return movements.filter(m => {
@@ -35,6 +40,19 @@ const StockPage: React.FC<StockPageProps> = ({
   }, [movements, clients, searchTerm]);
 
   const handleDelete = async (id: string) => {
+    const currentUser = authService.getCurrentUser();
+    if (currentUser?.role !== 'admin') {
+      alert("Suppression interdite : cette action est réservée aux administrateurs.");
+      return;
+    }
+    const movement = movements.find(m => m.id === id);
+    if (movement) {
+      const hasPayments = reglements.some(r => r.invoiceId === movement.id);
+      if (hasPayments || isMovementPaid(movement, reglements, locations)) {
+        alert("Suppression interdite : cette opération a déjà des règlements enregistrés ou est payée.");
+        return;
+      }
+    }
     if (window.confirm('Voulez-vous vraiment supprimer cette opération ? Cette action peut affecter les stocks et factures.')) {
       try {
         await movementService.deleteMovement(id);
@@ -69,14 +87,15 @@ const StockPage: React.FC<StockPageProps> = ({
       const currency = settings.currencySymbol || 'DT';
 
       const taxRate = settings.taxRate || 19;
-      const montantTTC = parseFloat((movement as any).montantTotal || 0);
+      const hasTotalValue = (movement as any).montantTotal !== undefined && (movement as any).montantTotal !== null;
+      const montantTTC = hasTotalValue ? Number((movement as any).montantTotal) : Number((movement as any).loyer || 0);
       const montantHT = montantTTC / (1 + (taxRate / 100));
       const montantTVA = montantTTC - montantHT;
       
       const typeLabel = (movement.type === MovementType.Sale || movement.type === MovementType.LocationOut) ? 'FACTURE' : 'BON D\'OPÉRATION';
       const title = typeLabel;
 
-      const hasTotals = montantTTC > 0;
+      const hasTotals = movement.type === MovementType.Sale || movement.type === MovementType.LocationOut;
 
       const html = `<!DOCTYPE html>
 <html lang="fr">
@@ -249,11 +268,11 @@ const StockPage: React.FC<StockPageProps> = ({
 
   return (
     <div className="space-y-6">
-      <div className="flex justify-between items-center">
+      <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4">
         <h1 className="text-2xl font-bold text-gray-900">Opérations de Stock</h1>
         <button
           onClick={() => { setMovementToEdit(null); setIsModalOpen(true); }}
-          className="flex items-center px-4 py-2 bg-primary-600 border border-transparent rounded-md shadow-sm text-sm font-medium text-white hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 transition-colors"
+          className="flex items-center justify-center px-4 py-2 bg-primary-600 border border-transparent rounded-md shadow-sm text-sm font-medium text-white hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 transition-colors self-start sm:self-auto"
         >
           <svg className="-ml-1 mr-2 h-5 w-5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
             <path fillRule="evenodd" d="M10 5a1 1 0 011 1v3h3a1 1 0 110 2h-3v3a1 1 0 11-2 0v-3H6a1 1 0 110-2h3V6a1 1 0 011-1z" clipRule="evenodd" />
@@ -262,43 +281,130 @@ const StockPage: React.FC<StockPageProps> = ({
         </button>
       </div>
 
-      <div className="bg-white shadow overflow-hidden sm:rounded-md">
-        {filteredMovements.length > 0 ? (
-          <ul className="divide-y divide-gray-200">
-            {filteredMovements.map((movement) => (
-              <li key={movement.id} className="p-4 hover:bg-gray-50 flex items-center justify-between">
-                <div>
-                  <div className="flex items-center space-x-3">
-                    <p className="text-sm font-medium text-primary-600 truncate">{movement.type}</p>
-                    <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
-                      {new Date(movement.date).toLocaleDateString()}
-                    </span>
+      {/* Navigation par Onglets */}
+      <div className="border-b border-gray-200">
+        <nav className="-mb-px flex space-x-8" aria-label="Tabs">
+          <button
+            onClick={() => setActiveTab('movements')}
+            className={`whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm transition-all focus:outline-none ${
+              activeTab === 'movements'
+                ? 'border-primary-500 text-primary-600'
+                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+            }`}
+          >
+            Liste des Opérations
+          </button>
+          <button
+            onClick={() => setActiveTab('audit')}
+            className={`whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm transition-all focus:outline-none ${
+              activeTab === 'audit'
+                ? 'border-primary-500 text-primary-600'
+                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+            }`}
+          >
+            Journal d'Audit & Historique
+          </button>
+        </nav>
+      </div>
+
+      {activeTab === 'movements' ? (
+        <div className="bg-white shadow overflow-hidden sm:rounded-md">
+          {filteredMovements.length > 0 ? (
+            <ul className="divide-y divide-gray-200">
+            {filteredMovements.map((movement) => {
+              const isPaid = isMovementPaid(movement, reglements, locations);
+              const isBillable = movement.type === MovementType.Sale || movement.type === MovementType.LocationOut;
+              return (
+                <li key={movement.id} className="p-4 hover:bg-gray-50 flex items-center justify-between">
+                  <div>
+                    <div className="flex items-center space-x-3">
+                      <p className="text-sm font-medium text-primary-600 truncate">{movement.type}</p>
+                      <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
+                        {new Date(movement.date).toLocaleDateString()}
+                      </span>
+                      {isPaid && (
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-green-100 text-green-800 border border-green-200 uppercase">
+                          Payé
+                        </span>
+                      )}
+                    </div>
+                    <div className="mt-2 text-sm text-gray-500">
+                      <p>Client: {getClientName(movement.clientId)}</p>
+                      <p>{renderMovementDetails(movement)}</p>
+                    </div>
                   </div>
-                  <div className="mt-2 text-sm text-gray-500">
-                    <p>Client: {getClientName(movement.clientId)}</p>
-                    <p>{renderMovementDetails(movement)}</p>
+                  <div className="flex space-x-3 items-center">
+                    {(!isBillable || isPaid) ? (
+                      <button onClick={() => generatePDF(movement)} className="p-2 text-green-600 hover:bg-green-50 rounded-full transition-colors" title="Imprimer">
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M6.72 13.89l-2.1 2.1m0 0l-2.1-2.1m2.1 2.1V6.14M16.5 18.75h-9M16.5 5.25h-9m-9 13.5h9" />
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M17.25 12V10.5a3.75 3.75 0 10-7.5 0V12m7.5 0v3.75m-7.5-3.75v3.75" />
+                        </svg>
+                      </button>
+                    ) : (
+                      <button 
+                        onClick={() => alert("Impression bloquée : l'impression est interdite tant que la facture n'est pas payée.")} 
+                        className="p-2 text-gray-300 bg-gray-50 border border-gray-100 rounded-full cursor-not-allowed" 
+                        title="Impression bloquée : la facture doit être payée pour être imprimée"
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5 text-gray-400">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M18.364 18.364A9 9 0 0 0 5.636 5.636m12.728 12.728A9 9 0 0 1 5.636 5.636m12.728 12.728L5.636 5.636" />
+                        </svg>
+                      </button>
+                    )}
+                    {(() => {
+                      const currentUser = authService.getCurrentUser();
+                      const isUserAdmin = currentUser?.role === 'admin';
+                      const hasPayments = reglements.some(r => r.invoiceId === movement.id);
+
+                      if (!isUserAdmin) {
+                        return (
+                          <button 
+                            onClick={() => alert("Accès refusé : la modification des opérations de stock est réservée aux administrateurs.")} 
+                            className="p-2 text-gray-400 bg-gray-50 border border-gray-100 rounded-full cursor-not-allowed" 
+                            title="Modification impossible : réservé aux administrateurs"
+                          >
+                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5.5 h-5.5 text-gray-400">
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z" />
+                            </svg>
+                          </button>
+                        );
+                      }
+
+                      if (hasPayments || isPaid) {
+                        return (
+                          <button 
+                            onClick={() => alert("Cette opération a des règlements associés (ou est payée) et ne peut plus être modifiée dans le stock.")} 
+                            className="p-2 text-gray-400 bg-gray-50 border border-gray-100 rounded-full cursor-not-allowed" 
+                            title="Modification impossible : règlements déjà enregistrés"
+                          >
+                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5.5 h-5.5 text-gray-400">
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z" />
+                            </svg>
+                          </button>
+                        );
+                      }
+
+                      return (
+                        <button onClick={() => { setMovementToEdit(movement); setIsModalOpen(true); }} className="p-2 text-indigo-600 hover:bg-indigo-50 rounded-full transition-colors" title="Modifier">
+                          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L10.582 16.07a4.5 4.5 0 0 1-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 0 1 1.13-1.897l8.932-8.931Zm0 0L19.5 7.125" />
+                          </svg>
+                        </button>
+                      );
+                    })()}
                   </div>
-                </div>
-                <div className="flex space-x-3 items-center">
-                  <button onClick={() => generatePDF(movement)} className="p-2 text-green-600 hover:bg-green-50 rounded-full transition-colors" title="Imprimer">
-                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5">
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M6.72 13.89l-2.1 2.1m0 0l-2.1-2.1m2.1 2.1V6.14M16.5 18.75h-9M16.5 5.25h-9m-9 13.5h9" />
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M17.25 12V10.5a3.75 3.75 0 10-7.5 0V12m7.5 0v3.75m-7.5-3.75v3.75" />
-                    </svg>
-                  </button>
-                  <button onClick={() => { setMovementToEdit(movement); setIsModalOpen(true); }} className="p-2 text-indigo-600 hover:bg-indigo-50 rounded-full transition-colors" title="Modifier">
-                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5">
-                      <path strokeLinecap="round" strokeLinejoin="round" d="m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L10.582 16.07a4.5 4.5 0 0 1-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 0 1 1.13-1.897l8.932-8.931Zm0 0L19.5 7.125" />
-                    </svg>
-                  </button>
-                </div>
-              </li>
-            ))}
+                </li>
+              );
+            })}
           </ul>
         ) : (
           <div className="p-6 text-center text-gray-500">Aucune opération trouvée.</div>
         )}
       </div>
+      ) : (
+        <AuditLogsView products={products} clients={clients} rooms={rooms} />
+      )}
 
       <AddMovementModal
         isOpen={isModalOpen}
@@ -311,6 +417,7 @@ const StockPage: React.FC<StockPageProps> = ({
         locations={locations}
         movementToEdit={movementToEdit}
         settings={settings}
+        reglements={reglements}
       />
     </div>
   );

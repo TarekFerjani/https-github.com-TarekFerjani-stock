@@ -1,8 +1,9 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
-import { Movement, MovementType, Client, Product, Settings, MovementSale, Room, MovementLocationIn, Location, MovementEmptyCratesOut, MovementLocationOut } from '../types';
+import { Movement, MovementType, Client, Product, Settings, MovementSale, Room, MovementLocationIn, Location, MovementEmptyCratesOut, MovementLocationOut, Reglement } from '../types';
 import { movementService } from '../services/movementService';
 import { authService } from '../services/authService';
+import { calculateMonthlyRent } from '../utils/paymentUtils';
 
 interface AddMovementModalProps {
   isOpen: boolean;
@@ -15,9 +16,10 @@ interface AddMovementModalProps {
   locations: Location[];
   movementToEdit: Movement | null;
   settings: Settings;
+  reglements: Reglement[];
 }
 
-const AddMovementModal: React.FC<AddMovementModalProps> = ({ isOpen, onClose, onSave, products, clients, rooms, movements, locations, movementToEdit, settings }) => {
+const AddMovementModal: React.FC<AddMovementModalProps> = ({ isOpen, onClose, onSave, products, clients, rooms, movements, locations, movementToEdit, settings, reglements }) => {
   const [movementData, setMovementData] = useState<Partial<Movement>>({});
 
   const resetForm = (type: MovementType) => {
@@ -82,15 +84,32 @@ const AddMovementModal: React.FC<AddMovementModalProps> = ({ isOpen, onClose, on
         for (const loc of clientLocs) {
           if (remaining <= 0) break;
           const withdraw = Math.min(remaining, loc.nbCaisse);
-          const days = Math.max(1, Math.ceil((new Date().getTime() - new Date(loc.entryDate).getTime()) / (1000 * 60 * 60 * 24)));
-          estimatedLoyer += withdraw * rentPerCratePerDay * days;
+          estimatedLoyer += calculateMonthlyRent(
+            loc.entryDate,
+            withdraw,
+            rentPerCratePerDay,
+            Number(settings.rentIncreaseRate) || 0,
+            Number(settings.increaseStartMonth) || 0
+          );
           remaining -= withdraw;
         }
         if (remaining > 0) {
-          estimatedLoyer += remaining * rentPerCratePerDay * 1;
+          estimatedLoyer += calculateMonthlyRent(
+            1, // 1 day counts as 1 month
+            remaining,
+            rentPerCratePerDay,
+            Number(settings.rentIncreaseRate) || 0,
+            Number(settings.increaseStartMonth) || 0
+          );
         }
       } else {
-        estimatedLoyer = nbCaisse * rentPerCratePerDay;
+        estimatedLoyer = calculateMonthlyRent(
+          1, // 1 day counts as 1 month
+          nbCaisse,
+          rentPerCratePerDay,
+          Number(settings.rentIncreaseRate) || 0,
+          Number(settings.increaseStartMonth) || 0
+        );
       }
 
       newMovementData = { 
@@ -106,7 +125,7 @@ const AddMovementModal: React.FC<AddMovementModalProps> = ({ isOpen, onClose, on
       const { nbCaisse = 0 } = crateData;
       const cautionPerCrate = Number(settings.cautionPerCrate) || 0;
       const caution = Number((nbCaisse * cautionPerCrate).toFixed(0));
-      newMovementData = { ...crateData, caution };
+      newMovementData = { ...crateData, caution, montantTotal: caution };
 
     } else if (type === MovementType.LocationOut) {
       const withdrawalData = movementData as any;
@@ -125,13 +144,24 @@ const AddMovementModal: React.FC<AddMovementModalProps> = ({ isOpen, onClose, on
       for (const loc of clientLocs) {
         if (remaining <= 0) break;
         const withdraw = Math.min(remaining, loc.nbCaisse);
-        const days = Math.max(1, Math.ceil((new Date().getTime() - new Date(loc.entryDate).getTime()) / (1000 * 60 * 60 * 24)));
-        calculatedLoyer += withdraw * rentPerCratePerDay * days;
+        calculatedLoyer += calculateMonthlyRent(
+          loc.entryDate,
+          withdraw,
+          rentPerCratePerDay,
+          Number(settings.rentIncreaseRate) || 0,
+          Number(settings.increaseStartMonth) || 0
+        );
         remaining -= withdraw;
       }
       
       if (remaining > 0) {
-        calculatedLoyer += remaining * rentPerCratePerDay * 1;
+        calculatedLoyer += calculateMonthlyRent(
+          1, // 1 day counts as 1 month
+          remaining,
+          rentPerCratePerDay,
+          Number(settings.rentIncreaseRate) || 0,
+          Number(settings.increaseStartMonth) || 0
+        );
       }
       
       const loyer = Number(calculatedLoyer.toFixed(0));
@@ -140,21 +170,11 @@ const AddMovementModal: React.FC<AddMovementModalProps> = ({ isOpen, onClose, on
       // Calculate montantTotal based on whether caution is applied
       const baseTotal = withdrawalData.cautionAppliquee ? Math.max(0, loyer - caution) : loyer;
       
-      const oldLoyer = Number(withdrawalData.loyer || 0);
-      const oldCautionAppliquee = withdrawalData.cautionAppliquee === true;
-      
-      // We auto-update montantTotal if it hasn't been manually set, or if the calculated loyer or caution status changed
-      const isFirstOrAuto = withdrawalData.montantTotal === undefined || 
-                            withdrawalData.montantTotal === null ||
-                            Number(withdrawalData.montantTotal) === (oldCautionAppliquee ? Math.max(0, oldLoyer - Number(withdrawalData.caution || 0)) : oldLoyer);
-      
-      const finalMontantTotal = isFirstOrAuto ? baseTotal : Number(withdrawalData.montantTotal || 0);
-      
       newMovementData = { 
         ...withdrawalData, 
         loyer, 
         caution,
-        montantTotal: finalMontantTotal 
+        montantTotal: baseTotal 
       };
     }
 
@@ -162,6 +182,39 @@ const AddMovementModal: React.FC<AddMovementModalProps> = ({ isOpen, onClose, on
       setMovementData(newMovementData);
     }
   }, [movementData, locations, settings]);
+
+  // Automatically select the active product and room for the selected client if there are active locations
+  useEffect(() => {
+    const { type, clientId } = movementData;
+    if (type === MovementType.LocationOut && clientId) {
+      const clientActiveLocations = locations.filter(
+        l => l.clientId === clientId && l.status === 'En cours'
+      );
+      if (clientActiveLocations.length > 0) {
+        const firstLoc = clientActiveLocations[0];
+        setMovementData(prev => {
+          const hasValidSelection = clientActiveLocations.some(
+            l => l.productId === prev.productId && l.roomId === prev.roomId
+          );
+          if (!hasValidSelection) {
+            return {
+              ...prev,
+              productId: firstLoc.productId,
+              roomId: firstLoc.roomId
+            };
+          }
+          return prev;
+        });
+      } else {
+        setMovementData(prev => {
+          if (prev.productId || prev.roomId) {
+            return { ...prev, productId: '', roomId: '' };
+          }
+          return prev;
+        });
+      }
+    }
+  }, [movementData.clientId, movementData.type, locations]);
 
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
@@ -197,13 +250,7 @@ const AddMovementModal: React.FC<AddMovementModalProps> = ({ isOpen, onClose, on
       .filter(m => m.clientId === movementData.clientId)
       .reduce((balance, m) => {
         if (m.type === MovementType.EmptyCratesOut) return balance + m.nbCaisse;
-        if (
-          m.type === MovementType.EmptyCratesReturn || 
-          m.type === MovementType.LocationOut || 
-          m.type === MovementType.Sale
-        ) {
-          return balance - m.nbCaisse;
-        }
+        if (m.type === MovementType.EmptyCratesReturn || m.type === MovementType.LocationOut || m.type === MovementType.Sale) return balance - m.nbCaisse;
         return balance;
       }, 0);
 
@@ -217,10 +264,33 @@ const AddMovementModal: React.FC<AddMovementModalProps> = ({ isOpen, onClose, on
         return sum + l.nbCaisse;
       }, 0);
 
-    const availableEmptyCrates = totalCratesOwnedByClient - cratesCurrentlyInLocation;
+    const availableEmptyCrates = Math.max(0, totalCratesOwnedByClient - cratesCurrentlyInLocation);
 
     return { totalCratesOwned: totalCratesOwnedByClient, cratesInLocation: cratesCurrentlyInLocation, availableEmptyCrates };
   }, [movementData.clientId, movements, locations, movementToEdit]);
+
+  const clientPaidCaution = useMemo(() => {
+    if (!movementData.clientId || !reglements || !movements) return 0;
+    return reglements
+      .filter(r => {
+        if (r.clientId !== movementData.clientId) return false;
+        if (r.invoiceId) {
+          const m = movements.find(mov => mov.id === r.invoiceId);
+          return m && m.type === MovementType.EmptyCratesOut;
+        }
+        return r.notes && r.notes.includes('Dépôt de caution caisses vides');
+      })
+      .reduce((sum, r) => sum + r.amount, 0);
+  }, [movementData.clientId, reglements, movements]);
+
+  const maxCratesCoveredByCaution = useMemo(() => {
+    const rate = Number(settings.cautionPerCrate) || 15;
+    return Math.floor(clientPaidCaution / rate);
+  }, [clientPaidCaution, settings.cautionPerCrate]);
+
+  const remainingCrateAuthorization = useMemo(() => {
+    return Math.max(0, maxCratesCoveredByCaution - clientBalances.availableEmptyCrates);
+  }, [maxCratesCoveredByCaution, clientBalances.availableEmptyCrates]);
 
   const roomOccupancy = useMemo(() => {
     const occupancyMap = new Map<string, number>();
@@ -262,6 +332,21 @@ const AddMovementModal: React.FC<AddMovementModalProps> = ({ isOpen, onClose, on
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
+    const currentUser = authService.getCurrentUser();
+    const isUserAdmin = currentUser?.role === 'admin';
+
+    if (movementToEdit) {
+      if (!isUserAdmin) {
+        alert("Modification interdite : l'édition des opérations de stock est réservée aux administrateurs.");
+        return;
+      }
+      const hasPayments = reglements && reglements.some(r => r.invoiceId === movementToEdit.id);
+      if (hasPayments) {
+        alert("Modification interdite : cette opération de stock a des règlements associés.");
+        return;
+      }
+    }
+
     const client = clients.find(c => c.id === movementData.clientId);
     if (!client) { alert("Veuillez sélectionner un client."); return; }
 
@@ -287,13 +372,15 @@ const AddMovementModal: React.FC<AddMovementModalProps> = ({ isOpen, onClose, on
     if (type === MovementType.LocationIn) {
       const room = rooms.find(r => r.id === (movementData as MovementLocationIn).roomId);
       if (!room) { alert("Veuillez sélectionner une chambre."); return; }
+      
+      if (nbCaisse > clientBalances.availableEmptyCrates) {
+        alert(`Opération bloquée : Le client ne dispose pas d'assez de caisses vides empruntées (${clientBalances.availableEmptyCrates} caisses disponibles) pour effectuer cette entrée en location de ${nbCaisse} caisses.`);
+        return;
+      }
+
       const currentOccupancy = roomOccupancy.get(room.id) || 0;
       if (nbCaisse > (room.nbCaisse - currentOccupancy)) {
         alert(`Capacité de la chambre dépassée. Espace disponible: ${room.nbCaisse - currentOccupancy} caisses.`);
-        return;
-      }
-      if (nbCaisse > clientBalances.availableEmptyCrates) {
-        alert(`Opération bloquée. Le client ne dispose que de ${clientBalances.availableEmptyCrates} caisses vides. Il ne peut pas en déposer ${nbCaisse} en location.`);
         return;
       }
     }
@@ -313,13 +400,34 @@ const AddMovementModal: React.FC<AddMovementModalProps> = ({ isOpen, onClose, on
         alert(`Opération bloquée. Le client ne peut pas emprunter plus de ${maxAllowed} caisses (Quota: ${client.caissesReservees}, Possédées: ${clientBalances.totalCratesOwned}).`);
         return;
       }
+
+      // Solde de caution validation
+      const proposedEmptyCrates = clientBalances.availableEmptyCrates + nbCaisse;
+      if (clientPaidCaution > 0 && proposedEmptyCrates > maxCratesCoveredByCaution) {
+        alert(`Opération bloquée. Le client dispose d'une caution payée de ${clientPaidCaution} ${settings.currencySymbol}, ce qui couvre un maximum de ${maxCratesCoveredByCaution} caisses vides détenues en même temps.\n\nIl détient déjà ${clientBalances.availableEmptyCrates} caisses vides.\nQuantité demandée: ${nbCaisse} caisses (Total proposé: ${proposedEmptyCrates} caisses).\n\nVeuillez enregistrer un nouveau paiement de caution ou retourner des caisses.`);
+        return;
+      }
+
       const globalCratesInUse = movements.reduce((sum, m) => {
         if (m.type === MovementType.EmptyCratesOut) return sum + m.nbCaisse;
         if (m.type === MovementType.EmptyCratesReturn) return sum - m.nbCaisse;
         return sum;
       }, 0);
-      if (nbCaisse > (settings.totalAvailableCrates - globalCratesInUse)) {
-        alert(`Stock global de caisses insuffisant. Disponible: ${settings.totalAvailableCrates - globalCratesInUse}.`);
+      const totalAvailable = (settings && Number(settings.totalAvailableCrates) > 0)
+        ? Number(settings.totalAvailableCrates)
+        : 1000;
+      const availableCrates = totalAvailable - globalCratesInUse;
+
+      if (nbCaisse > availableCrates) {
+        const disponible = Math.max(0, availableCrates);
+        alert(
+          `Stock global de caisses insuffisant.\n\n` +
+          `• Quantité demandée : ${nbCaisse} caisse(s)\n` +
+          `• Caisses disponibles : ${disponible} caisse(s)\n` +
+          `• Stock total configuré : ${totalAvailable} caisse(s)\n` +
+          `• Caisses actuellement sorties/utilisées : ${globalCratesInUse} caisse(s)\n\n` +
+          `Pour augmenter la capacité totale de caisses, vous pouvez modifier le "Stock Total Caisses" dans la page Paramètres.`
+        );
         return;
       }
     }
@@ -327,12 +435,12 @@ const AddMovementModal: React.FC<AddMovementModalProps> = ({ isOpen, onClose, on
 
     console.log("Submitting movement data:", movementData);
     try {
+      const currentUser = authService.getCurrentUser();
+      const updatedBy = currentUser ? currentUser.email : 'Inconnu';
       if (movementToEdit) {
-        const currentUser = authService.getCurrentUser();
-        const updatedBy = currentUser ? currentUser.email : 'Inconnu';
         await movementService.updateMovement({ ...movementToEdit, ...movementData, updatedBy } as Movement);
       } else {
-        await movementService.addMovement(movementData as Omit<Movement, 'id' | 'date'>);
+        await movementService.addMovement({ ...movementData, updatedBy } as any);
       }
       onSave();
     } catch (error: any) {
@@ -407,7 +515,7 @@ const AddMovementModal: React.FC<AddMovementModalProps> = ({ isOpen, onClose, on
                   <div>
                     <label className="block text-sm font-medium text-gray-700">Prix unitaire configuré</label>
                     <div className="mt-1 py-2 px-3 bg-gray-100 rounded-md shadow-sm text-gray-600 font-medium">
-                        {settings.rentPerCratePerDay || '0'} {settings.currencySymbol} / caisse
+                        {settings.rentPerCratePerDay || '0'} {settings.currencySymbol}
                     </div>
                   </div>
                   <div>
@@ -417,18 +525,8 @@ const AddMovementModal: React.FC<AddMovementModalProps> = ({ isOpen, onClose, on
                     </div>
                   </div>
                 </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700">Montant Total à payer</label>
-                    <input type="number" step="0.01" name="montantTotal" value={(movementData as MovementLocationOut).montantTotal || ''} onChange={handleChange} className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3" required />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700">Statut Paiement</label>
-                    <select name="paymentStatus" value={(movementData as MovementLocationOut).paymentStatus || 'En attente'} onChange={handleChange} className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3">
-                      <option value="En attente">En attente</option>
-                      <option value="Payé">Payé</option>
-                    </select>
-                  </div>
+                <div className="text-sm space-y-1 pt-1">
+                   <p className="text-lg font-bold text-primary-700">Montant Total à payer: {Math.round((movementData as MovementLocationOut).montantTotal || 0)} {settings.currencySymbol}</p>
                 </div>
                 <label><input type="checkbox" name="cautionAppliquee" checked={!!(movementData as MovementLocationOut).cautionAppliquee} onChange={handleChange} /> Appliquer la caution</label>
                 {movementData.cautionAppliquee && (
@@ -442,8 +540,40 @@ const AddMovementModal: React.FC<AddMovementModalProps> = ({ isOpen, onClose, on
 
             {/* Section for Empty Crates Out */}
             {movementData.type === MovementType.EmptyCratesOut && (
-              <div className="p-4 border rounded-md bg-gray-50 space-y-4">
-                <p>Caution à appliquer: {Math.round((movementData as MovementEmptyCratesOut).caution || 0)} {settings.currencySymbol}</p>
+              <div className="p-4 border rounded-xl bg-gray-50/70 space-y-3" id="empty-crates-caution-details">
+                <p className="font-semibold text-gray-700 text-sm">Caution de Sortie de Caisses Vides :</p>
+                <div className="grid grid-cols-2 gap-y-2 gap-x-4 text-xs bg-white p-4 rounded-xl border border-gray-100 shadow-sm">
+                  <span className="text-gray-500">Caution de cette sortie :</span>
+                  <span className="font-bold text-right text-gray-800">{Math.round((movementData as MovementEmptyCratesOut).caution || 0)} {settings.currencySymbol}</span>
+
+                  <span className="text-gray-500">Caution déjà payée par le client :</span>
+                  <span className="font-bold text-right text-emerald-600">{Math.round(clientPaidCaution)} {settings.currencySymbol}</span>
+
+                  <span className="text-gray-500">Caisses couvertes par caution payée :</span>
+                  <span className="font-bold text-right text-blue-600">{maxCratesCoveredByCaution} caisses</span>
+
+                  <span className="text-gray-500">Caisses vides détenues actuellement :</span>
+                  <span className="font-bold text-right text-orange-600">{clientBalances.availableEmptyCrates} caisses</span>
+
+                  <span className="text-gray-500 font-semibold border-t border-dashed pt-2 mt-1">Autorisation restante :</span>
+                  <span className="font-bold text-right text-primary-600 border-t border-dashed pt-2 mt-1">{remainingCrateAuthorization} caisses</span>
+                </div>
+                {clientPaidCaution > 0 && remainingCrateAuthorization <= 0 && (
+                  <div className="p-3 bg-rose-50 border border-rose-100 text-rose-800 text-xs rounded-xl flex items-start space-x-2">
+                    <svg className="h-4 w-4 text-rose-500 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                    </svg>
+                    <span>Le client a atteint sa limite de caisses couvertes par sa caution payée. Veuillez enregistrer un nouveau paiement de caution ou retourner des caisses pour libérer de l'autorisation.</span>
+                  </div>
+                )}
+                {clientPaidCaution === 0 && (
+                  <div className="p-3 bg-blue-50 border border-blue-100 text-blue-800 text-xs rounded-xl flex items-start space-x-2">
+                    <svg className="h-4 w-4 text-blue-500 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    <span>Cette sortie créera une facture de caution de <strong>{Math.round((movementData as MovementEmptyCratesOut).caution || 0)} {settings.currencySymbol}</strong>. Le client devra payer cette facture pour couvrir ces caisses.</span>
+                  </div>
+                )}
               </div>
             )}
 

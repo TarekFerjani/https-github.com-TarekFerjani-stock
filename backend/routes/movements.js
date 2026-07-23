@@ -29,6 +29,27 @@ function mapMovement(row) {
     };
 }
 
+// Helper write to audit log
+async function logAudit(connection, movementId, actionType, changedBy, oldValues, newValues) {
+    try {
+        const id = uuidv4();
+        await connection.query(
+            'INSERT INTO movement_audits (id, movement_id, action_type, changed_by, changed_at, old_values, new_values) VALUES ($1, $2, $3, $4, $5, $6, $7)',
+            [
+                id,
+                movementId,
+                actionType,
+                changedBy || 'Inconnu',
+                new Date(),
+                oldValues ? JSON.stringify(oldValues) : null,
+                newValues ? JSON.stringify(newValues) : null
+            ]
+        );
+    } catch (err) {
+        console.error('Error writing to movement_audits:', err);
+    }
+}
+
 // ============================================================
 // GET all movements
 // ============================================================
@@ -39,6 +60,39 @@ router.get('/', async (req, res) => {
     } catch (error) {
         console.error('Error fetching movements:', error);
         res.status(500).json({ message: error.message });
+    }
+});
+
+// ============================================================
+// GET all audit logs
+// ============================================================
+router.get('/audit-logs', async (req, res) => {
+    try {
+        const result = await pool.query(`
+            SELECT ma.*, m.type as movement_type, c.nom as client_nom, c.prenom as client_prenom
+            FROM movement_audits ma
+            LEFT JOIN movements m ON ma.movement_id = m.id
+            LEFT JOIN clients c ON m.clientId = c.id
+            ORDER BY ma.changed_at DESC
+        `);
+        
+        const logs = result.rows.map(row => ({
+            id: row.id,
+            movementId: row.movement_id,
+            actionType: row.action_type,
+            changedBy: row.changed_by,
+            changedAt: row.changed_at,
+            oldValues: row.old_values ? JSON.parse(row.old_values) : null,
+            newValues: row.new_values ? JSON.parse(row.new_values) : null,
+            movementType: row.movement_type,
+            clientNom: row.client_nom,
+            clientPrenom: row.client_prenom
+        }));
+        
+        res.json(logs);
+    } catch (error) {
+        console.error('Error fetching audit logs:', error);
+        res.status(500).json({ message: error.message || "Une erreur est survenue lors de la récupération des journaux d'audit." });
     }
 });
 
@@ -181,6 +235,10 @@ router.post('/', async (req, res) => {
             if (!roomId) throw new Error('Chambre non spécifiée.');
             if (nbCaisse <= 0) throw new Error('Le nombre de caisses doit être supérieur à 0.');
 
+            if (nbCaisse > balance.availableEmpty) {
+                throw new Error(`Opération bloquée : Le client ne dispose pas d'assez de caisses vides empruntées (${balance.availableEmpty} caisses disponibles) pour effectuer cette entrée en location de ${nbCaisse} caisses.`);
+            }
+
             const roomResult = await connection.query('SELECT * FROM rooms WHERE id = $1', [roomId]);
             const room = roomResult.rows[0];
             if (!room) throw new Error('Chambre non trouvée.');
@@ -194,10 +252,6 @@ router.post('/', async (req, res) => {
             const available = roomCapacity - occupancy;
             if (nbCaisse > available) {
                 throw new Error(`Capacité de la chambre dépassée. Disponible: ${available} caisses.`);
-            }
-
-            if (nbCaisse > balance.availableEmpty) {
-                throw new Error(`Le client ne dispose que de ${balance.availableEmpty} caisses vides disponibles.`);
             }
 
             await connection.query(
@@ -236,14 +290,16 @@ router.post('/', async (req, res) => {
 
             await fifoWithdraw(connection, clientId, productId, roomId, nbCaisse);
 
+            const initialPaymentStatus = (montantTotal <= 0) ? 'Payé' : (body.paymentStatus || 'En attente');
+
             await connection.query(
-                'INSERT INTO movements (id, date, clientId, type, productId, roomId, nbCaisse, poidsBrut, prixUnitaire, poidsNet, montantTotal, taxe) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)',
-                [movementId, new Date(), clientId, type, productId, roomId, nbCaisse, poidsBrut, prixUnitaire, poidsNet, montantTotal, taxe]
+                'INSERT INTO movements (id, date, clientId, type, productId, roomId, nbCaisse, poidsBrut, prixUnitaire, poidsNet, montantTotal, taxe, paymentStatus) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)',
+                [movementId, new Date(), clientId, type, productId, roomId, nbCaisse, poidsBrut, prixUnitaire, poidsNet, montantTotal, taxe, initialPaymentStatus]
             );
 
             await connection.query(
                 'INSERT INTO invoices (id, date, clientId, type, montantTotal, paymentStatus) VALUES ($1,$2,$3,$4,$5,$6)',
-                [movementId, new Date(), clientId, type, montantTotal, body.paymentStatus || 'En attente']
+                [movementId, new Date(), clientId, type, montantTotal, initialPaymentStatus]
             );
         } else if (type === 'Fin de Location') {
             const productId = body.productId;
@@ -260,14 +316,16 @@ router.post('/', async (req, res) => {
 
             await fifoWithdraw(connection, clientId, productId, roomId, nbCaisse);
 
+            const initialPaymentStatus = (montantTotal <= 0) ? 'Payé' : (body.paymentStatus || 'En attente');
+
             await connection.query(
                 'INSERT INTO movements (id, date, clientId, type, productId, roomId, nbCaisse, loyer, montantTotal, caution, cautionAppliquee, paymentStatus) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)',
-                [movementId, new Date(), clientId, type, productId, roomId, nbCaisse, loyer, montantTotal, cautionAppliquee ? caution : null, cautionAppliquee, body.paymentStatus || 'En attente']
+                [movementId, new Date(), clientId, type, productId, roomId, nbCaisse, loyer, montantTotal, cautionAppliquee ? caution : null, cautionAppliquee, initialPaymentStatus]
             );
 
             await connection.query(
                 'INSERT INTO invoices (id, date, clientId, type, montantTotal, loyer, caution, paymentStatus) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)',
-                [movementId, new Date(), clientId, type, montantTotal, loyer, cautionAppliquee ? caution : null, body.paymentStatus || 'En attente']
+                [movementId, new Date(), clientId, type, montantTotal, loyer, cautionAppliquee ? caution : null, initialPaymentStatus]
             );
         } else if (type === 'Caisses vides') {
             const nbCaisse = parseInt(body.nbCaisse) || 0;
@@ -288,27 +346,40 @@ router.post('/', async (req, res) => {
             const globalOut = Number(globalOutResult.rows[0]?.globalout || 0);
             const globalReturned = Number(globalReturnedResult.rows[0]?.globalreturned || 0);
             const globalInUse = globalOut - globalReturned;
-            const totalAvailable = settings ? Number(settings.totalavailablecrates ?? settings.totalAvailableCrates ?? 0) : 0;
+            const configuredTotal = (settings && Number(settings.totalavailablecrates ?? settings.totalAvailableCrates) > 0)
+                ? Number(settings.totalavailablecrates ?? settings.totalAvailableCrates)
+                : 1000;
+            const availableCrates = configuredTotal - globalInUse;
 
-            if (nbCaisse > (totalAvailable - globalInUse)) {
-                throw new Error(`Stock global de caisses insuffisant. Disponible: ${totalAvailable - globalInUse}.`);
+            if (nbCaisse > availableCrates) {
+                const disponible = Math.max(0, availableCrates);
+                throw new Error(`Stock global de caisses insuffisant. Disponible: ${disponible} caisses (Stock total: ${configuredTotal}, En utilisation: ${globalInUse}). Vous pouvez augmenter le stock total dans les Paramètres.`);
             }
 
             const cautionPerCrate = settings ? (parseFloat(settings.cautionpercrate ?? settings.cautionPerCrate) || 0) : 0;
             const caution = nbCaisse * cautionPerCrate;
+            const initialPaymentStatus = body.paymentStatus || 'En attente';
 
             await connection.query(
-                'INSERT INTO movements (id, date, clientId, type, nbCaisse, caution) VALUES ($1,$2,$3,$4,$5,$6)',
-                [movementId, new Date(), clientId, type, nbCaisse, caution]
+                'INSERT INTO movements (id, date, clientId, type, nbCaisse, caution, montantTotal, paymentStatus) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)',
+                [movementId, new Date(), clientId, type, nbCaisse, caution, caution, initialPaymentStatus]
+            );
+
+            await connection.query(
+                'INSERT INTO invoices (id, date, clientId, type, montantTotal, caution, paymentStatus) VALUES ($1,$2,$3,$4,$5,$6,$7)',
+                [movementId, new Date(), clientId, type, caution, caution, initialPaymentStatus]
             );
         } else {
             throw new Error(`Type de mouvement inconnu: ${type}`);
         }
 
+        const createdMovementResult = await connection.query('SELECT * FROM movements WHERE id = $1', [movementId]);
+        const newMovement = mapMovement(createdMovementResult.rows[0]);
+        await logAudit(connection, movementId, 'CREATE', body.updatedBy || 'Inconnu', null, newMovement);
+
         await connection.query('COMMIT');
 
-        const createdMovementResult = await connection.query('SELECT * FROM movements WHERE id = $1', [movementId]);
-        res.status(201).json(mapMovement(createdMovementResult.rows[0]));
+        res.status(201).json(newMovement);
     } catch (error) {
         if (connection) await connection.query('ROLLBACK');
         console.error('CRITICAL ERROR in POST /api/movements:', error);
@@ -334,6 +405,13 @@ router.put('/:id', async (req, res) => {
         const oldMovement = oldMovementResult.rows[0];
         if (!oldMovement) throw new Error('Mouvement introuvable');
 
+        // Vérifier s'il y a eu des règlements associés à cette opération de stock
+        const reglementsResult = await connection.query('SELECT COUNT(*) as paycount FROM reglements WHERE invoiceid = $1', [id]);
+        const payCount = parseInt(reglementsResult.rows[0]?.paycount || 0, 10);
+        if (payCount > 0) {
+            throw new Error("Modification interdite : des paiements ont déjà été enregistrés pour cette opération.");
+        }
+
         const oldType = oldMovement.type;
         const newType = movementData.type || oldType;
         const oldNb = parseInt(oldMovement.nbcaisse ?? oldMovement.nbCaisse ?? oldMovement.nbcaisseretournees ?? oldMovement.nbCaisseRetournees) || 0;
@@ -355,6 +433,12 @@ router.put('/:id', async (req, res) => {
                 const newCurrentNb = locNb + diff;
                 if (newCurrentNb < 0) throw new Error("Impossible de réduire l'entrée : déjà trop de caisses sorties.");
 
+                // Check empty crates available
+                const clientBalance = await getClientCrateBalance(connection, oldClientId);
+                if (newNb > (clientBalance.availableEmpty + oldNb)) {
+                    throw new Error(`Opération bloquée : Le client ne dispose pas d'assez de caisses vides empruntées (${clientBalance.availableEmpty + oldNb} caisses disponibles au total en comptant cette opération) pour effectuer cette entrée en location de ${newNb} caisses.`);
+                }
+
                 await connection.query(
                     'UPDATE locations SET nbCaisse = $1, initialNbCaisse = $2, roomId = $3, productId = $4 WHERE id = $5',
                     [newCurrentNb, newNb, newRoom, newProduct, id]
@@ -374,15 +458,25 @@ router.put('/:id', async (req, res) => {
             const oldPayStatus = oldMovement.paymentstatus ?? oldMovement.paymentStatus;
             const oldLoyer = oldMovement.loyer;
             const oldCaution = oldMovement.caution;
+
+            const finalMontant = Number(movementData.montantTotal ?? oldMontant ?? 0);
+            const finalPayStatus = (finalMontant <= 0) ? 'Payé' : (movementData.paymentStatus || oldPayStatus || 'En attente');
+
             if (newType === 'Vente') {
                 await connection.query('UPDATE invoices SET montanttotal = $1, paymentstatus = $2 WHERE id = $3',
-                    [movementData.montantTotal || oldMontant, movementData.paymentStatus || oldPayStatus || 'En attente', id]
+                    [finalMontant, finalPayStatus, id]
                 );
             } else if (newType === 'Fin de Location') {
                 await connection.query('UPDATE invoices SET montanttotal = $1, loyer = $2, caution = $3, paymentstatus = $4 WHERE id = $5',
-                    [movementData.montantTotal || oldMontant, movementData.loyer || oldLoyer, movementData.cautionAppliquee ? (movementData.caution || oldCaution) : null, movementData.paymentStatus || oldPayStatus || 'En attente', id]
+                    [finalMontant, movementData.loyer || oldLoyer, movementData.cautionAppliquee ? (movementData.caution || oldCaution) : null, finalPayStatus, id]
+                );
+            } else if (newType === 'Caisses vides') {
+                await connection.query('UPDATE invoices SET montanttotal = $1, caution = $2, paymentstatus = $3 WHERE id = $4',
+                    [finalMontant, movementData.caution || oldCaution, finalPayStatus, id]
                 );
             }
+            movementData.paymentStatus = finalPayStatus;
+            movementData.paymentstatus = finalPayStatus;
         }
 
         const updateData = { ...movementData, updatedAt, updatedBy };
@@ -394,6 +488,10 @@ router.put('/:id', async (req, res) => {
         if (updateQuery) {
             await connection.query(updateQuery.text, updateQuery.values);
         }
+
+        const updatedMovementResult = await connection.query('SELECT * FROM movements WHERE id = $1', [id]);
+        const newMovement = mapMovement(updatedMovementResult.rows[0]);
+        await logAudit(connection, id, 'UPDATE', updatedBy || 'Inconnu', mapMovement(oldMovement), newMovement);
 
         await connection.query('COMMIT');
         res.json({ id, ...updateData });

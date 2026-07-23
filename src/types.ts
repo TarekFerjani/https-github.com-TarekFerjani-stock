@@ -170,6 +170,8 @@ export interface Settings {
   rentPerCratePerDay: number;
   totalAvailableCrates: number;
   companySignature?: string; // Base64
+  rentIncreaseRate: number;
+  increaseStartMonth: number;
 }
 
 export interface Invoice {

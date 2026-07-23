@@ -115,6 +115,17 @@ CREATE TABLE IF NOT EXISTS `invoices` (
   `paymentStatus` ENUM('Payé', 'En attente') DEFAULT NULL
 );
 
+-- Créer la table des audits de mouvements
+CREATE TABLE IF NOT EXISTS `movement_audits` (
+  `id` VARCHAR(36) NOT NULL PRIMARY KEY,
+  `movement_id` VARCHAR(36) NOT NULL,
+  `action_type` VARCHAR(50) NOT NULL,
+  `changed_by` VARCHAR(255) NOT NULL,
+  `changed_at` DATETIME NOT NULL,
+  `old_values` TEXT,
+  `new_values` TEXT
+);
+
 -- Insérer les données par défaut --
 
 -- Mot de passe pour les deux utilisateurs est "password"

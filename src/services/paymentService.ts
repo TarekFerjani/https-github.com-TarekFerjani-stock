@@ -25,4 +25,8 @@ export const paymentService = {
   deleteAvance: (id: string): Promise<void> => {
     return apiService.delete<void>(`/payments/avances/${id}`);
   },
+
+  transferCaution: (data: { clientId: string; amount: number; contractId?: string | null; invoiceId?: string | null; notes?: string }): Promise<{ success: boolean; message: string }> => {
+    return apiService.post<{ success: boolean; message: string }>('/payments/transfer-caution', data);
+  },
 };

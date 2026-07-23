@@ -1,3 +1,4 @@
+const { Pool } = require('pg');
 const fs = require('fs');
 const path = require('path');
 
@@ -47,7 +48,9 @@ const defaultSettings = [
     emptycrateweight: 1.2,
     taxrate: 19.0,
     rentpercrateperday: 0.50,
-    totalavailablecrates: 1000
+    totalavailablecrates: 1000,
+    rentincreaserate: 0,
+    increasestartmonth: 0
   }
 ];
 
@@ -94,9 +97,6 @@ function loadDb() {
     saveDb();
   }
 }
-
-// Initial load
-loadDb();
 
 // Main query emulator function
 async function query(sql, params) {
@@ -384,14 +384,361 @@ async function query(sql, params) {
   return { rows: [], rowCount: 0 };
 }
 
-const pool = {
-  connect: async () => ({
-    query: async (sql, params) => query(sql, params),
-    release: () => {}
-  }),
-  query: async (sql, params) => query(sql, params),
-  on: () => {},
-  end: () => {}
+// Resilient database helpers
+const isConnectionError = (err) => {
+  if (!err) return false;
+  const msg = (err.message || '').toLowerCase();
+  const code = (err.code || '');
+  return (
+    code === 'ECONNREFUSED' ||
+    code === 'ETIMEDOUT' ||
+    code === 'ENOTFOUND' ||
+    code === 'EHOSTUNREACH' ||
+    code === 'EAI_AGAIN' ||
+    msg.includes('connect') ||
+    msg.includes('refused') ||
+    msg.includes('timeout') ||
+    msg.includes('authentication') ||
+    msg.includes('password authentication failed')
+  );
 };
 
-module.exports = pool;
+let useLocalFallback = false;
+
+// Pre-load local database in all cases as warm standby
+loadDb();
+
+// Global active pool instance
+let activePool;
+
+if (process.env.DB_HOST) {
+  console.log(`[Database] Connecting to PostgreSQL at ${process.env.DB_HOST}:${process.env.DB_PORT || 5432}...`);
+  const realPool = new Pool({
+    host: process.env.DB_HOST,
+    port: parseInt(process.env.DB_PORT || '5432'),
+    user: process.env.DB_USER,
+    password: process.env.DB_PASSWORD,
+    database: process.env.DB_DATABASE,
+    ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : undefined
+  });
+
+  activePool = {
+    query: async (sql, params) => {
+      if (useLocalFallback) {
+        return query(sql, params);
+      }
+      try {
+        return await realPool.query(sql, params);
+      } catch (err) {
+        if (isConnectionError(err)) {
+          console.warn(`[Database Fallback] PostgreSQL connection failed (${err.message}). Falling back to local data.json storage.`);
+          useLocalFallback = true;
+          return query(sql, params);
+        }
+        throw err;
+      }
+    },
+    connect: async () => {
+      if (useLocalFallback) {
+        return {
+          query: async (sql, params) => query(sql, params),
+          release: () => {}
+        };
+      }
+      try {
+        const client = await realPool.connect();
+        const originalClientQuery = client.query;
+        client.query = async (sql, params) => {
+          try {
+            return await originalClientQuery.call(client, sql, params);
+          } catch (err) {
+            if (isConnectionError(err)) {
+              console.warn(`[Database Fallback] Client PG error detected: ${err.message}. Switching to local fallback.`);
+              useLocalFallback = true;
+              return query(sql, params);
+            }
+            throw err;
+          }
+        };
+        return client;
+      } catch (err) {
+        if (isConnectionError(err)) {
+          console.warn(`[Database Fallback] PG connect failed: ${err.message}. Switching to local fallback.`);
+          useLocalFallback = true;
+          return {
+            query: async (sql, params) => query(sql, params),
+            release: () => {}
+          };
+        }
+        throw err;
+      }
+    },
+    on: (event, handler) => {
+      realPool.on(event, handler);
+    },
+    end: async () => {
+      if (realPool && typeof realPool.end === 'function') {
+        try {
+          await realPool.end();
+        } catch (e) {}
+      }
+    }
+  };
+
+  // Self-initializing async function to build schema in PostgreSQL or fallback
+  (async () => {
+    try {
+      console.log('[Database] Checking tables...');
+      
+      await activePool.query(`
+        CREATE TABLE IF NOT EXISTS users (
+          id VARCHAR(36) NOT NULL PRIMARY KEY,
+          email VARCHAR(255) NOT NULL UNIQUE,
+          password VARCHAR(255) NOT NULL,
+          role VARCHAR(50) NOT NULL DEFAULT 'user',
+          permissions TEXT
+        );
+      `);
+      
+      await activePool.query(`
+        CREATE TABLE IF NOT EXISTS clients (
+          id VARCHAR(36) NOT NULL PRIMARY KEY,
+          nom VARCHAR(255) NOT NULL,
+          prenom VARCHAR(255) NOT NULL,
+          cin VARCHAR(255) NOT NULL UNIQUE,
+          telephone VARCHAR(255),
+          email VARCHAR(255),
+          caissesreservees INTEGER DEFAULT 0
+        );
+      `);
+      
+      await activePool.query(`
+        CREATE TABLE IF NOT EXISTS products (
+          id VARCHAR(36) NOT NULL PRIMARY KEY,
+          nom VARCHAR(255) NOT NULL,
+          categorie VARCHAR(255) NOT NULL,
+          codebarres VARCHAR(255)
+        );
+      `);
+      
+      await activePool.query(`
+        CREATE TABLE IF NOT EXISTS rooms (
+          id VARCHAR(36) NOT NULL PRIMARY KEY,
+          nom VARCHAR(255) NOT NULL UNIQUE,
+          nbcaisse INTEGER NOT NULL
+        );
+      `);
+      
+      await activePool.query(`
+        CREATE TABLE IF NOT EXISTS settings (
+          id SERIAL PRIMARY KEY,
+          companyname VARCHAR(255),
+          companyaddress TEXT,
+          companywebsite VARCHAR(255),
+          companyphone VARCHAR(255),
+          companyemail VARCHAR(255),
+          companylogo TEXT,
+          companysignature TEXT,
+          fiscalid VARCHAR(255),
+          currencysymbol VARCHAR(10),
+          cautionpercrate NUMERIC(10, 2),
+          emptycrateweight NUMERIC(10, 2),
+          taxrate NUMERIC(5, 2),
+          rentpercrateperday NUMERIC(10, 2),
+          totalavailablecrates INTEGER,
+          rentincreaserate NUMERIC(10, 2) DEFAULT 0,
+          increasestartmonth INTEGER DEFAULT 0
+        );
+      `);
+
+      // Ensure columns exist on existing databases
+      try {
+        await activePool.query('ALTER TABLE settings ADD COLUMN IF NOT EXISTS rentincreaserate NUMERIC(10, 2) DEFAULT 0;');
+        await activePool.query('ALTER TABLE settings ADD COLUMN IF NOT EXISTS increasestartmonth INTEGER DEFAULT 0;');
+      } catch (colErr) {
+        console.log('[Database] Soft migration warning (could be MySQL or already exists):', colErr.message);
+      }
+      
+      await activePool.query(`
+        CREATE TABLE IF NOT EXISTS contracts (
+          id VARCHAR(36) NOT NULL PRIMARY KEY,
+          date TIMESTAMP NOT NULL,
+          clientid VARCHAR(36) NOT NULL,
+          type VARCHAR(50) NOT NULL,
+          nbcaisse INTEGER NOT NULL,
+          caution NUMERIC(10, 2) NOT NULL,
+          avance NUMERIC(10, 2) DEFAULT 0,
+          periode VARCHAR(255),
+          signature TEXT,
+          signedat TIMESTAMP NULL,
+          status VARCHAR(50) DEFAULT 'En attente'
+        );
+      `);
+      
+      await activePool.query(`
+        CREATE TABLE IF NOT EXISTS movements (
+          id VARCHAR(36) NOT NULL PRIMARY KEY,
+          date TIMESTAMP NOT NULL,
+          clientid VARCHAR(36) NOT NULL,
+          type TEXT NOT NULL,
+          productid VARCHAR(36) DEFAULT NULL,
+          nbcaisse INTEGER DEFAULT NULL,
+          roomid VARCHAR(36) DEFAULT NULL,
+          poidsbrut NUMERIC(10, 2) DEFAULT NULL,
+          prixunitaire NUMERIC(10, 2) DEFAULT NULL,
+          poidsnet NUMERIC(10, 2) DEFAULT NULL,
+          montanttotal NUMERIC(10, 2) DEFAULT NULL,
+          taxe NUMERIC(10, 2) DEFAULT NULL,
+          nbcaisseretournees INTEGER DEFAULT NULL,
+          loyer NUMERIC(10, 2) DEFAULT NULL,
+          cautionappliquee BOOLEAN DEFAULT NULL,
+          caution NUMERIC(10, 2) DEFAULT NULL,
+          paymentstatus VARCHAR(50) DEFAULT NULL,
+          updatedat TIMESTAMP DEFAULT NULL,
+          updatedby VARCHAR(255) DEFAULT NULL
+        );
+      `);
+      
+      await activePool.query(`
+        CREATE TABLE IF NOT EXISTS locations (
+          id VARCHAR(36) NOT NULL PRIMARY KEY,
+          clientid VARCHAR(36) NOT NULL,
+          productid VARCHAR(36) NOT NULL,
+          roomid VARCHAR(36) NOT NULL,
+          nbcaisse INTEGER NOT NULL,
+          initialnbcaisse INTEGER NOT NULL,
+          entrydate TIMESTAMP NOT NULL,
+          exitdate TIMESTAMP,
+          status VARCHAR(50) NOT NULL DEFAULT 'En cours'
+        );
+      `);
+      
+      await activePool.query(`
+        CREATE TABLE IF NOT EXISTS invoices (
+          id VARCHAR(36) NOT NULL PRIMARY KEY,
+          date TIMESTAMP NOT NULL,
+          clientid VARCHAR(36) NOT NULL,
+          type TEXT NOT NULL,
+          montanttotal NUMERIC(10, 2) DEFAULT NULL,
+          loyer NUMERIC(10, 2) DEFAULT NULL,
+          caution NUMERIC(10, 2) DEFAULT NULL,
+          paymentstatus VARCHAR(50) DEFAULT NULL
+        );
+      `);
+      
+      await activePool.query(`
+        CREATE TABLE IF NOT EXISTS avances (
+          id VARCHAR(36) NOT NULL PRIMARY KEY,
+          date TIMESTAMP NOT NULL,
+          clientid VARCHAR(36) NOT NULL,
+          amount NUMERIC(10, 2) NOT NULL,
+          paymentmethod VARCHAR(50) DEFAULT 'Espèces',
+          contractid VARCHAR(36) DEFAULT NULL,
+          notes TEXT
+        );
+      `);
+      
+      await activePool.query(`
+        CREATE TABLE IF NOT EXISTS reglements (
+          id VARCHAR(36) NOT NULL PRIMARY KEY,
+          date TIMESTAMP NOT NULL,
+          clientid VARCHAR(36) NOT NULL,
+          amount NUMERIC(10, 2) NOT NULL,
+          paymentmethod VARCHAR(50) DEFAULT 'Espèces',
+          reference VARCHAR(255) DEFAULT '',
+          invoiceid VARCHAR(36) DEFAULT NULL,
+          notes TEXT
+        );
+      `);
+
+      await activePool.query(`
+        CREATE TABLE IF NOT EXISTS movement_audits (
+          id VARCHAR(36) NOT NULL PRIMARY KEY,
+          movement_id VARCHAR(36) NOT NULL,
+          action_type VARCHAR(50) NOT NULL,
+          changed_by VARCHAR(255) NOT NULL,
+          changed_at TIMESTAMP NOT NULL,
+          old_values TEXT,
+          new_values TEXT
+        );
+      `);
+
+      // Seed default values
+      const adminCheck = await activePool.query("SELECT id FROM users WHERE email = 'admin@example.com'");
+      if (adminCheck.rows.length === 0) {
+        console.log('[Database] Seeding default admin user...');
+        await activePool.query(
+          "INSERT INTO users (id, email, password, role, permissions) VALUES ($1, $2, $3, $4, $5)",
+          ['admin-uuid-placeholder', 'admin@example.com', '$2a$10$RvGBSWUp.Bz7JwRKND7Xx.BBUTJ6PMCaWYcZ5ywVyVZ7D9w8k37.u', 'admin', null]
+        );
+      }
+
+      const userCheck = await activePool.query("SELECT id FROM users WHERE email = 'user@example.com'");
+      if (userCheck.rows.length === 0) {
+        console.log('[Database] Seeding default employee user...');
+        const defaultUserPerms = JSON.stringify({
+          dashboard: true,
+          clients: true,
+          products: true,
+          rooms: true,
+          locations: false,
+          ventes: true,
+          movements: true,
+          factures: false,
+          reports: false
+        });
+        await activePool.query(
+          "INSERT INTO users (id, email, password, role, permissions) VALUES ($1, $2, $3, $4, $5)",
+          ['user-uuid-placeholder', 'user@example.com', '$2a$10$NCZCli/fMvHhJcCCXdZ8k.BnOqZGK8EoyvWjIOth/7RMmMFaw81A.', 'user', defaultUserPerms]
+        );
+      }
+
+      const settingsCheck = await activePool.query("SELECT id FROM settings LIMIT 1");
+      if (settingsCheck.rows.length === 0) {
+        console.log('[Database] Seeding default settings...');
+        await activePool.query(
+          `INSERT INTO settings (id, companyname, companyaddress, companywebsite, companyphone, companyemail, companylogo, companysignature, fiscalid, currencysymbol, cautionpercrate, emptycrateweight, taxrate, rentpercrateperday, totalavailablecrates, rentincreaserate, increasestartmonth) 
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
+          [
+            1,
+            'Frigo Inc.',
+            '123 Rue de la Glace, 75001 Paris, France',
+            'www.frigo-inc.com',
+            '0123456789',
+            'admin@example.com',
+            '',
+            '',
+            'FR123456789',
+            'DT',
+            15.00,
+            1.2,
+            19.0,
+            0.50,
+            1000,
+            0,
+            0
+          ]
+        );
+      }
+
+      console.log('✅ [Database] Setup check and initialization complete!');
+    } catch (err) {
+      console.error('❌ [Database] Failed setup check:', err.message);
+    }
+  })();
+} else {
+  console.log('[Database] No DB_HOST specified. Falling back to local emulated JSON database (backend/data.json).');
+  useLocalFallback = true;
+  
+  activePool = {
+    connect: async () => ({
+      query: async (sql, params) => query(sql, params),
+      release: () => {}
+    }),
+    query: async (sql, params) => query(sql, params),
+    on: () => {},
+    end: () => {}
+  };
+}
+
+module.exports = activePool;

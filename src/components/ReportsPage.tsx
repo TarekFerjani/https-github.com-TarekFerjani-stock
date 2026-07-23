@@ -1,9 +1,10 @@
 import React, { useMemo, useState } from 'react';
-import { Movement, MovementType, Settings, Room, Location, Invoice, Client } from '../types';
+import { Movement, MovementType, Settings, Room, Location, Invoice, Client, Reglement, Contract } from '../types';
 import LineChart from './LineChart';
 import BarChart from './BarChart';
 import PieChart from './PieChart';
 import StatCard from './StatCard';
+import { calculateMonthlyRent } from '../utils/paymentUtils';
 
 interface ReportsPageProps {
   movements: Movement[];
@@ -12,6 +13,8 @@ interface ReportsPageProps {
   locations: Location[];
   invoices: Invoice[];
   clients: Client[];
+  reglements: Reglement[];
+  contracts: Contract[];
 }
 
 interface ClientMetrics {
@@ -25,7 +28,7 @@ interface ClientMetrics {
   color: string;
 }
 
-const ReportsPage: React.FC<ReportsPageProps> = ({ movements, settings, rooms, locations, invoices, clients }) => {
+const ReportsPage: React.FC<ReportsPageProps> = ({ movements, settings, rooms, locations, invoices, clients, reglements, contracts }) => {
   const [selectedClientId, setSelectedClientId] = useState<string | null>(null);
   const [showCurve, setShowCurve] = useState(true);
 
@@ -37,25 +40,33 @@ const ReportsPage: React.FC<ReportsPageProps> = ({ movements, settings, rooms, l
     ];
 
     const list = clients.map((client, index) => {
-      // 1. Calculate empty crates
-      const emptyCrates = movements
-        .filter(m => m.clientId === client.id)
-        .reduce((balance, m) => {
-          if (m.type === MovementType.EmptyCratesOut) return balance + (Number(m.nbCaisse) || 0);
-          if (
-            m.type === MovementType.EmptyCratesReturn || 
-            m.type === MovementType.LocationOut || 
-            m.type === MovementType.Sale
-          ) {
-            return balance - (Number(m.nbCaisse) || 0);
-          }
-          return balance;
-        }, 0);
+      // 1. Calculate empty crates: EmptyCratesOut - EmptyCratesReturn - cratesCurrentlyInLocation
+      const clientCratesInStock = locations
+        .filter(l => l.clientId === client.id && l.status === 'En cours')
+        .reduce((sum, l) => sum + (Number(l.nbCaisse) || 0), 0);
 
-      // 2. Calculate pending invoices amount
-      const pendingInvoices = invoices
-        .filter(inv => inv.clientId === client.id && inv.paymentStatus === 'En attente')
-        .reduce((sum, inv) => sum + (Number((inv as any).loyer || (inv as any).montantTotal) || 0), 0);
+      const emptyCratesOutSum = movements
+        .filter(m => m.clientId === client.id && m.type === MovementType.EmptyCratesOut)
+        .reduce((sum, m) => sum + (Number(m.nbCaisse) || 0), 0);
+
+      const emptyCratesReturnSum = movements
+        .filter(m => m.clientId === client.id && (m.type === MovementType.EmptyCratesReturn || m.type === MovementType.LocationOut || m.type === MovementType.Sale))
+        .reduce((sum, m) => sum + (Number(m.nbCaisse) || 0), 0);
+
+      const emptyCrates = emptyCratesOutSum - emptyCratesReturnSum - clientCratesInStock;
+
+      // 2. Calculate pending invoices amount (remaining balance)
+      const pendingInvoices = movements
+        .filter(m => m.clientId === client.id && (m.type === MovementType.Sale || m.type === MovementType.LocationOut || m.type === MovementType.EmptyCratesOut) && (m as any).paymentStatus === 'En attente')
+        .reduce((sum, m) => {
+          const hasTotal = (m as any).montantTotal !== undefined && (m as any).montantTotal !== null;
+          const totalAmount = hasTotal ? Number((m as any).montantTotal) : Number((m as any).loyer || (m as any).caution || 0);
+          const paidAmount = reglements
+            .filter(r => r.invoiceId === m.id)
+            .reduce((total, r) => total + r.amount, 0);
+          const remaining = Math.max(0, totalAmount - paidAmount);
+          return sum + remaining;
+        }, 0);
 
       // 3. Calculate ongoing rent accumulated
       const ongoingLoyer = locations
@@ -63,8 +74,13 @@ const ReportsPage: React.FC<ReportsPageProps> = ({ movements, settings, rooms, l
         .reduce((sum, loc) => {
           const entryTime = new Date(loc.entryDate).getTime();
           if (isNaN(entryTime)) return sum;
-          const days = Math.max(1, Math.ceil((new Date().getTime() - entryTime) / (1000 * 60 * 60 * 24)));
-          const amount = (days || 0) * (Number(loc.nbCaisse) || 0) * (Number(settings.rentPerCratePerDay) || 0);
+          const amount = calculateMonthlyRent(
+            loc.entryDate,
+            Number(loc.nbCaisse) || 0,
+            Number(settings.rentPerCratePerDay) || 0,
+            Number(settings.rentIncreaseRate) || 0,
+            Number(settings.increaseStartMonth) || 0
+          );
           return sum + (isNaN(amount) ? 0 : amount);
         }, 0);
 
@@ -90,7 +106,7 @@ const ReportsPage: React.FC<ReportsPageProps> = ({ movements, settings, rooms, l
       ...item,
       riskScore: Math.round(((item.emptyCrates / maxCr) * 50) + ((item.pendingAmount / maxPend) * 50))
     })).sort((a, b) => b.riskScore - a.riskScore);
-  }, [clients, movements, invoices, locations, settings]);
+  }, [clients, movements, invoices, locations, settings, reglements, contracts]);
 
   const reportsData = useMemo(() => {
     try {
@@ -153,7 +169,7 @@ const ReportsPage: React.FC<ReportsPageProps> = ({ movements, settings, rooms, l
         totalSalesRevenue: Array.from(salesMonthlyMap.values()).reduce((sum, v) => sum + v.total, 0),
         totalLocationsRevenue: Array.from(locationsMonthlyMap.values()).reduce((sum, v) => sum + v.total, 0),
         totalCratesInStock: locations.filter(l => l.status === 'En cours').reduce((sum, l) => sum + (Number(l.nbCaisse) || 0), 0),
-        activeLocations: locations.filter(l => l.status === 'En cours').length
+        activeContracts: contracts.filter(c => c.status === 'Actif').length
       };
 
       return { 
@@ -165,15 +181,21 @@ const ReportsPage: React.FC<ReportsPageProps> = ({ movements, settings, rooms, l
       console.error("Erreur calcul rapports:", err);
       return null;
     }
-  }, [movements, locations, settings.currencySymbol]);
+  }, [movements, locations, settings.currencySymbol, contracts]);
 
   const paymentStatusData = useMemo(() => {
-    const statusTotals = invoices
-      .filter(inv => inv.type === MovementType.LocationOut)
-      .reduce((acc, inv) => {
-        const status = inv.paymentStatus || 'En attente';
-        const amount = Number((inv as any).loyer || (inv as any).montantTotal) || 0;
-        acc[status] = (acc[status] || 0) + amount;
+    const statusTotals = movements
+      .filter(m => m.type === MovementType.LocationOut)
+      .reduce((acc, m) => {
+        const hasTotal = (m as any).montantTotal !== undefined && (m as any).montantTotal !== null;
+        const totalAmount = hasTotal ? Number((m as any).montantTotal) : Number((m as any).loyer || (m as any).caution || 0);
+        const paidAmount = reglements
+          .filter(r => r.invoiceId === m.id)
+          .reduce((total, r) => total + r.amount, 0);
+        const remaining = Math.max(0, totalAmount - paidAmount);
+
+        acc['Payé'] = (acc['Payé'] || 0) + paidAmount;
+        acc['En attente'] = (acc['En attente'] || 0) + remaining;
         return acc;
       }, {} as Record<'Payé' | 'En attente', number>);
 
@@ -183,8 +205,13 @@ const ReportsPage: React.FC<ReportsPageProps> = ({ movements, settings, rooms, l
       .reduce((sum, loc) => {
         const entryTime = new Date(loc.entryDate).getTime();
         if (isNaN(entryTime)) return sum;
-        const days = Math.max(1, Math.ceil((new Date().getTime() - entryTime) / (1000 * 60 * 60 * 24)));
-        const amount = (days || 0) * (Number(loc.nbCaisse) || 0) * (Number(settings.rentPerCratePerDay) || 0);
+        const amount = calculateMonthlyRent(
+          loc.entryDate,
+          Number(loc.nbCaisse) || 0,
+          Number(settings.rentPerCratePerDay) || 0,
+          Number(settings.rentIncreaseRate) || 0,
+          Number(settings.increaseStartMonth) || 0
+        );
         return sum + (isNaN(amount) ? 0 : amount);
       }, 0);
 
@@ -194,7 +221,7 @@ const ReportsPage: React.FC<ReportsPageProps> = ({ movements, settings, rooms, l
       { label: 'Payé', value: statusTotals['Payé'] || 0, color: '#16a34a' },
       { label: 'En attente (dont en cours)', value: statusTotals['En attente'] || 0, color: '#f97316' },
     ].filter(item => item.value > 0);
-  }, [invoices, locations, settings]);
+  }, [movements, locations, settings, reglements]);
 
   const selectedClientDetails = useMemo(() => {
     if (!selectedClientId) return null;
@@ -282,8 +309,13 @@ const ReportsPage: React.FC<ReportsPageProps> = ({ movements, settings, rooms, l
     invoices
       .filter(inv => inv.paymentStatus === 'En attente')
       .forEach(inv => {
-        const amount = Number((inv as any).loyer || (inv as any).montantTotal) || 0;
-        clientMap.set(inv.clientId, (clientMap.get(inv.clientId) || 0) + amount);
+        const hasTotal = (inv as any).montantTotal !== undefined && (inv as any).montantTotal !== null;
+        const totalAmount = hasTotal ? Number((inv as any).montantTotal) : Number((inv as any).loyer || (inv as any).caution || 0);
+        const paidAmount = reglements
+          .filter(r => r.invoiceId === inv.id)
+          .reduce((total, r) => total + r.amount, 0);
+        const remaining = Math.max(0, totalAmount - paidAmount);
+        clientMap.set(inv.clientId, (clientMap.get(inv.clientId) || 0) + remaining);
       });
 
     // Ongoing rentals (Accumulated rent)
@@ -292,8 +324,13 @@ const ReportsPage: React.FC<ReportsPageProps> = ({ movements, settings, rooms, l
       .forEach(loc => {
         const entryTime = new Date(loc.entryDate).getTime();
         if (!isNaN(entryTime)) {
-          const days = Math.max(1, Math.ceil((new Date().getTime() - entryTime) / (1000 * 60 * 60 * 24)));
-          const amount = (days || 0) * (Number(loc.nbCaisse) || 0) * (Number(settings.rentPerCratePerDay) || 0);
+          const amount = calculateMonthlyRent(
+            loc.entryDate,
+            Number(loc.nbCaisse) || 0,
+            Number(settings.rentPerCratePerDay) || 0,
+            Number(settings.rentIncreaseRate) || 0,
+            Number(settings.increaseStartMonth) || 0
+          );
           clientMap.set(loc.clientId, (clientMap.get(loc.clientId) || 0) + (isNaN(amount) ? 0 : amount));
         }
       });
@@ -318,7 +355,7 @@ const ReportsPage: React.FC<ReportsPageProps> = ({ movements, settings, rooms, l
         color: '#f97316'
       }]
     };
-  }, [invoices, locations, clients, settings]);
+  }, [invoices, locations, clients, settings, reglements]);
 
   if (!reportsData) {
     return <div className="p-10 text-center text-red-500 font-bold">Erreur lors de la génération des rapports. Veuillez vérifier vos données.</div>;
@@ -336,7 +373,7 @@ const ReportsPage: React.FC<ReportsPageProps> = ({ movements, settings, rooms, l
         <StatCard title="Total CA Ventes" value={`${Math.round(reportsData.reportStats.totalSalesRevenue).toLocaleString('fr-FR')} ${settings.currencySymbol}`} icon="cash" />
         <StatCard title="Total CA Locations" value={`${Math.round(reportsData.reportStats.totalLocationsRevenue).toLocaleString('fr-FR')} ${settings.currencySymbol}`} icon="cash" />
         <StatCard title="Caisses en stock" value={reportsData.reportStats.totalCratesInStock.toString()} icon="box" />
-        <StatCard title="Contrats actifs" value={reportsData.reportStats.activeLocations.toString()} icon="users" />
+        <StatCard title="Contrats actifs" value={reportsData.reportStats.activeContracts.toString()} icon="users" />
       </div>
 
       {/* HIGHLY CREATIVE INTERACTIVE COMPARATIVE CURVE */}

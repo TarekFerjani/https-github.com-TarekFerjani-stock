@@ -97,6 +97,8 @@ function toCamelCase(row) {
         taxRate:              Number(row.taxrate              ?? row.taxRate              ?? 0),
         rentPerCratePerDay:   Number(row.rentpercrateperday   ?? row.rentPerCratePerDay   ?? 0),
         totalAvailableCrates: Number(row.totalavailablecrates ?? row.totalAvailableCrates ?? 0),
+        rentIncreaseRate:     Number(row.rentincreaserate     ?? row.rentIncreaseRate     ?? 0),
+        increaseStartMonth:   Number(row.increasestartmonth   ?? row.increaseStartMonth   ?? 0),
     };
 }
 
@@ -117,6 +119,8 @@ function toDbColumns(settings) {
         taxrate:              settings.taxRate,
         rentpercrateperday:   settings.rentPerCratePerDay,
         totalavailablecrates: settings.totalAvailableCrates,
+        rentincreaserate:     settings.rentIncreaseRate,
+        increasestartmonth:   settings.increaseStartMonth,
     };
 }
 
@@ -134,7 +138,9 @@ const defaultSettings = {
     emptycrateweight: 1.2,
     taxrate: 19.0,
     rentpercrateperday: 0.50,
-    totalavailablecrates: 1000
+    totalavailablecrates: 1000,
+    rentincreaserate: 0,
+    increasestartmonth: 0
 };
 
 // GET settings
@@ -146,7 +152,7 @@ router.get('/', async (req, res) => {
         if (!settings) {
             // Insert default settings if the table is empty
             await pool.query(
-                `INSERT INTO settings (companyName, companyAddress, companyWebsite, companyPhone, companyEmail, companyLogo, companySignature, fiscalId, currencySymbol, cautionPerCrate, emptyCrateWeight, taxRate, rentPerCratePerDay, totalAvailableCrates) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+                `INSERT INTO settings (companyName, companyAddress, companyWebsite, companyPhone, companyEmail, companyLogo, companySignature, fiscalId, currencySymbol, cautionPerCrate, emptyCrateWeight, taxRate, rentPerCratePerDay, totalAvailableCrates, rentincreaserate, increasestartmonth) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
                 [
                     defaultSettings.companyname,
                     defaultSettings.companyaddress,
@@ -161,7 +167,9 @@ router.get('/', async (req, res) => {
                     defaultSettings.emptycrateweight,
                     defaultSettings.taxrate,
                     defaultSettings.rentpercrateperday,
-                    defaultSettings.totalavailablecrates
+                    defaultSettings.totalavailablecrates,
+                    defaultSettings.rentincreaserate,
+                    defaultSettings.increasestartmonth
                 ]
             );
             settings = {
@@ -193,6 +201,27 @@ router.get('/', async (req, res) => {
 router.put('/', async (req, res) => {
     const camelSettings = req.body;
     try {
+        // Validation : Interdire de modifier la configuration s'il y a déjà des données dans l'application
+        const movementsCheck = await pool.query('SELECT id FROM movements LIMIT 1');
+        const locationsCheck = await pool.query('SELECT id FROM locations LIMIT 1');
+        const clientsCheck = await pool.query('SELECT id FROM clients LIMIT 1');
+        const productsCheck = await pool.query('SELECT id FROM products LIMIT 1');
+        const roomsCheck = await pool.query('SELECT id FROM rooms LIMIT 1');
+        const contractsCheck = await pool.query('SELECT id FROM contracts LIMIT 1');
+
+        const hasData = (movementsCheck.rows && movementsCheck.rows.length > 0) ||
+                        (locationsCheck.rows && locationsCheck.rows.length > 0) ||
+                        (clientsCheck.rows && clientsCheck.rows.length > 0) ||
+                        (productsCheck.rows && productsCheck.rows.length > 0) ||
+                        (roomsCheck.rows && roomsCheck.rows.length > 0) ||
+                        (contractsCheck.rows && contractsCheck.rows.length > 0);
+
+        if (hasData) {
+            return res.status(400).json({ 
+                message: "Modification interdite : des données (mouvements, clients, produits, chambres ou contrats) existent déjà dans la base. Veuillez d'abord réinitialiser les données pour changer la configuration." 
+            });
+        }
+
         // Convertir les clés camelCase du frontend en colonnes PostgreSQL (minuscules)
         const dbSettings = toDbColumns(camelSettings);
         const columns = Object.keys(dbSettings).filter(k => dbSettings[k] !== undefined);
@@ -215,17 +244,19 @@ router.post('/reset-data', async (req, res) => {
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
-        // Ordre important pour respecter les contraintes de clés étrangères
-        await client.query('TRUNCATE TABLE invoices');
-        await client.query('TRUNCATE TABLE locations');
-        await client.query('TRUNCATE TABLE movements');
-        // Il faut supprimer les enregistrements avant de tronquer les tables parentes
+        // Ordre important pour respecter les contraintes de clés étrangères (child-to-parent)
+        await client.query('DELETE FROM reglements');
+        await client.query('DELETE FROM avances');
+        await client.query('DELETE FROM invoices');
+        await client.query('DELETE FROM locations');
+        await client.query('DELETE FROM movements');
+        await client.query('DELETE FROM contracts');
         await client.query('DELETE FROM users');
         await client.query('DELETE FROM clients');
         await client.query('DELETE FROM products');
         await client.query('DELETE FROM rooms');
-        await client.query('TRUNCATE TABLE settings RESTART IDENTITY');
-        await client.query('TRUNCATE TABLE permissions');
+        await client.query('DELETE FROM settings');
+        await client.query('DELETE FROM permissions');
 
         // Réinsérer les données par défaut
         await client.query(

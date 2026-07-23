@@ -6,6 +6,10 @@ export const movementService = {
     return apiService.get<Movement[]>('/movements');
   },
 
+  getAuditLogs: (): Promise<any[]> => {
+    return apiService.get<any[]>('/movements/audit-logs');
+  },
+
   addMovement: (movementData: Omit<Movement, 'id' | 'date'>): Promise<Movement> => {
     // Le backend gérera la création du mouvement, de la location et de la facture associées dans une seule transaction.
     return apiService.post<Movement>('/movements', movementData);

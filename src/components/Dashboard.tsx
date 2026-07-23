@@ -1,7 +1,8 @@
 import React from 'react';
 import PieChart from './PieChart';
 import StatCard from './StatCard';
-import { Location, Invoice, MovementType, Settings, Client, Room, Movement } from '../types';
+import { Location, Invoice, MovementType, Settings, Client, Room, Movement, Reglement } from '../types';
+import { calculateMonthlyRent } from '../utils/paymentUtils';
 
 interface DashboardProps {
   locations: Location[];
@@ -10,9 +11,10 @@ interface DashboardProps {
   rooms: Room[];
   settings: Settings;
   movements: Movement[];
+  reglements: Reglement[];
 }
 
-const Dashboard: React.FC<DashboardProps> = ({ locations, clients, invoices, rooms, settings, movements }) => {
+const Dashboard: React.FC<DashboardProps> = ({ locations, clients, invoices, rooms, settings, movements, reglements }) => {
   const stockDistributionData = React.useMemo(() => {
     const clientMap = new Map(clients.map(c => [c.id, `${c.nom} ${c.prenom}`]));
     const stockByClient = locations
@@ -61,33 +63,40 @@ const Dashboard: React.FC<DashboardProps> = ({ locations, clients, invoices, roo
       .reduce((sum, loc) => {
         const entryTime = new Date(loc.entryDate).getTime();
         if (isNaN(entryTime)) return sum;
-        const days = Math.max(1, Math.ceil((new Date().getTime() - entryTime) / (1000 * 60 * 60 * 24)));
-        const amount = (days || 0) * (Number(loc.nbCaisse) || 0) * (Number(settings.rentPerCratePerDay) || 0);
+        const amount = calculateMonthlyRent(
+          loc.entryDate,
+          Number(loc.nbCaisse) || 0,
+          Number(settings.rentPerCratePerDay) || 0,
+          Number(settings.rentIncreaseRate) || 0,
+          Number(settings.increaseStartMonth) || 0
+        );
         return sum + (isNaN(amount) ? 0 : amount);
       }, 0);
 
-    const pendingTotal = (invoices
-      .filter(inv => (inv.type === MovementType.Sale || inv.type === MovementType.LocationOut) && inv.paymentStatus === 'En attente')
-      .reduce((sum, inv) => sum + (Number((inv as any).montantTotal || (inv as any).loyer || 0) || 0), 0)) + ongoingLoyer;
+    const pendingTotal = movements
+      .filter(m => (m.type === MovementType.Sale || m.type === MovementType.LocationOut || m.type === MovementType.EmptyCratesOut) && (m as any).paymentStatus === 'En attente')
+      .reduce((sum, m) => {
+        const hasTotal = (m as any).montantTotal !== undefined && (m as any).montantTotal !== null;
+        const totalAmount = hasTotal ? Number((m as any).montantTotal) : Number((m as any).loyer || 0);
+        const paidAmount = reglements
+          .filter(r => r.invoiceId === m.id)
+          .reduce((total, r) => total + r.amount, 0);
+        const remaining = Math.max(0, totalAmount - paidAmount);
+        return sum + remaining;
+      }, 0);
 
     const totalCapacity = rooms.reduce((sum, r) => sum + r.nbCaisse, 0);
     const occupancyRate = totalCapacity > 0 ? Math.round((totalCratesInStock / totalCapacity) * 100) : 0;
 
-    const totalCratesOwned = movements.reduce((sum, m) => {
-      if (m.type === MovementType.EmptyCratesOut) {
-        return sum + (Number(m.nbCaisse) || 0);
-      }
-      if (
-        m.type === MovementType.EmptyCratesReturn || 
-        m.type === MovementType.LocationOut || 
-        m.type === MovementType.Sale
-      ) {
-        return sum - (Number(m.nbCaisse) || 0);
-      }
-      return sum;
-    }, 0);
+    const emptyCratesOutSum = movements
+      .filter(m => m.type === MovementType.EmptyCratesOut)
+      .reduce((sum, m) => sum + (Number(m.nbCaisse) || 0), 0);
 
-    const emptyCratesOutside = totalCratesOwned - totalCratesInStock;
+    const emptyCratesReturnSum = movements
+      .filter(m => m.type === MovementType.EmptyCratesReturn || m.type === MovementType.LocationOut || m.type === MovementType.Sale)
+      .reduce((sum, m) => sum + (Number(m.nbCaisse) || 0), 0);
+
+    const emptyCratesOutside = emptyCratesOutSum - emptyCratesReturnSum - totalCratesInStock;
 
     return {
         totalCratesInStock,
@@ -96,7 +105,7 @@ const Dashboard: React.FC<DashboardProps> = ({ locations, clients, invoices, roo
         occupancyRate,
         emptyCratesOutside: Math.max(0, emptyCratesOutside)
     };
-  }, [locations, invoices, rooms, settings, movements]);
+  }, [locations, invoices, rooms, settings, movements, reglements]);
   
   return (
     <div className="space-y-8 pb-8">

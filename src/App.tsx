@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { Product, Client, Room, Movement, Page, User, PagePermissions, Settings, Role, Invoice, Location } from './types';
+import { Product, Client, Room, Movement, Page, User, PagePermissions, Settings, Role, Invoice, Location, Reglement, Contract } from './types';
 import Header from './components/Header';
 import Dashboard from './components/Dashboard';
 import Sidebar from './components/Sidebar';
@@ -25,6 +25,8 @@ import LoginPage from './components/LoginPage';
 import { authService } from './services/authService';
 import { permissionsService } from './services/permissionsService';
 import { settingsService } from './services/settingsService';
+import { paymentService } from './services/paymentService';
+import { contractService } from './services/contractService';
 import BottomNavBar from './components/BottomNavBar';
 import ClientSignPage from './components/ClientSignPage';
 
@@ -41,6 +43,8 @@ const App: React.FC = () => {
   const [movements, setMovements] = useState<Movement[]>([]);
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [locations, setLocations] = useState<Location[]>([]);
+  const [reglements, setReglements] = useState<Reglement[]>([]);
+  const [contracts, setContracts] = useState<Contract[]>([]);
 
   const [currentPage, setCurrentPage] = useState<Page>('dashboard');
   const [isLoading, setIsLoading] = useState(true);
@@ -61,7 +65,9 @@ const App: React.FC = () => {
         fetchedMovements,
         fetchedLocations,
         fetchedSettings,
-        fetchedInvoices
+        fetchedInvoices,
+        fetchedReglements,
+        fetchedContracts
       ] = await Promise.all([
         inventoryService.getProducts(),
         clientService.getClients(),
@@ -69,7 +75,9 @@ const App: React.FC = () => {
         movementService.getMovements(),
         locationService.getLocations(),
         settingsService.getSettings(),
-        invoiceService.getInvoices()
+        invoiceService.getInvoices(),
+        paymentService.getReglements(),
+        contractService.getContracts()
       ]);
       setProducts(fetchedProducts);
       setClients(fetchedClients);
@@ -78,6 +86,8 @@ const App: React.FC = () => {
       setLocations(fetchedLocations);
       setSettings(fetchedSettings);
       setInvoices(fetchedInvoices);
+      setReglements(fetchedReglements || []);
+      setContracts(fetchedContracts || []);
     } catch (error: any) {
       console.error("Failed to fetch data", error);
       setDataError(error?.message || 'Impossible de charger les données.');
@@ -115,6 +125,8 @@ const App: React.FC = () => {
     setMovements([]);
     setInvoices([]);
     setLocations([]);
+    setReglements([]);
+    setContracts([]);
     setSettings(null);
     setCurrentPage('dashboard');
   };
@@ -166,7 +178,8 @@ const App: React.FC = () => {
       clients,
       invoices,
       settings,
-      movements
+      movements,
+      reglements
     };
 
     if (!allowedPages.includes(currentPage)) {
@@ -178,7 +191,7 @@ const App: React.FC = () => {
       case 'dashboard':
         return <Dashboard {...dashboardProps} />;
       case 'reports':
-        return <ReportsPage movements={movements} settings={settings} rooms={rooms} locations={locations} invoices={invoices} clients={clients} />;
+        return <ReportsPage movements={movements} settings={settings} rooms={rooms} locations={locations} invoices={invoices} clients={clients} reglements={reglements} contracts={contracts} />;
       case 'products':
         return <ProductsPage {...commonPageProps} products={products} />;
       case 'clients':
@@ -188,17 +201,18 @@ const App: React.FC = () => {
       case 'locations':
         return <LocationsPage locations={locations} clients={clients} products={products} rooms={rooms} isLoading={isLoading} searchTerm={searchTerm} />;
       case 'stock':
-        return <StockPage {...commonPageProps} products={products} clients={clients} rooms={rooms} movements={movements} locations={locations} />;
+        return <StockPage {...commonPageProps} products={products} clients={clients} rooms={rooms} movements={movements} locations={locations} reglements={reglements} />;
       case 'factures':
-        return <InvoicesPage movements={movements} products={products} clients={clients} settings={settings} searchTerm={searchTerm} locations={locations} fetchAllData={fetchAllData} />;
+      case 'reglements':
+        return <InvoicesPage movements={movements} products={products} clients={clients} settings={settings} searchTerm={searchTerm} locations={locations} fetchAllData={fetchAllData} reglements={reglements} user={user} />;
       case 'contrats':
         return <ContractsPage clients={clients} settings={settings} searchTerm={searchTerm} />;
-      case 'reglements':
-        return <PaymentsPage clients={clients} settings={settings} searchTerm={searchTerm} fetchAllData={fetchAllData} user={user} />;
       case 'users':
         return user.role === Role.admin ? <UsersPage /> : <div>Accès non autorisé</div>;
-      case 'settings':
-        return user.role === Role.admin ? <SettingsPage settings={settings} onSave={fetchAllData} onResetData={handleResetData} /> : <div>Accès non autorisé</div>;
+      case 'settings': {
+        const hasEntries = movements.length > 0 || locations.length > 0 || clients.length > 0 || products.length > 0 || rooms.length > 0 || contracts.length > 0;
+        return user.role === Role.admin ? <SettingsPage settings={settings} onSave={fetchAllData} onResetData={handleResetData} hasEntries={hasEntries} /> : <div>Accès non autorisé</div>;
+      }
 
       default:
         return <Dashboard {...dashboardProps} />;

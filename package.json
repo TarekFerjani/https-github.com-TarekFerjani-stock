@@ -19,6 +19,7 @@
     "express": "^5.2.1",
     "jspdf": "^2.5.1",
     "jspdf-autotable": "^3.8.2",
+    "lucide-react": "^1.25.0",
     "nodemailer": "^9.0.3",
     "pdfkit": "^0.19.1",
     "pg": "^8.22.0",

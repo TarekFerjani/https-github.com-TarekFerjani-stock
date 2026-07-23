@@ -27,7 +27,7 @@ const UsersPage: React.FC = () => {
     users: "Utilisateurs",
     stock: "Stock",
     contrats: "Contrats",
-    reglements: "Règlements & Avances",
+    reglements: "Paiements",
   };
 
   const fetchData = useCallback(async () => {
