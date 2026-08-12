@@ -1,9 +1,7 @@
-name: Build and Push Docker Image
+name: Build Docker Image Nexus
 
 on:
-  push:
-    branches:
-      - master
+  workflow_dispatch:
 
 jobs:
   docker:
@@ -27,5 +25,5 @@ jobs:
           file: ./Dockerfile
           push: true
           tags: |
-            ${{ secrets.NEXUS_REGISTRY }}/stock-app:latest
-            ${{ secrets.NEXUS_REGISTRY }}/stock-app:${{ github.sha }}
+            ${{ secrets.NEXUS_REGISTRY }}/docker-hosted/stock-app:latest
+            ${{ secrets.NEXUS_REGISTRY }}/docker-hosted/stock-app:${{ github.sha }}
